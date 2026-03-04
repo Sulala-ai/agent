@@ -3,6 +3,7 @@
  * Sulala CLI — status, tasks, logs, enqueue, skill install, init.
  */
 import 'dotenv/config';
+import { execSync } from 'child_process';
 import { mkdirSync, existsSync, copyFileSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -43,10 +44,14 @@ async function version(checkLatest: boolean): Promise<void> {
     const latest = await getLatestVersion();
     if (latest) {
       if (latest !== current) {
-        console.error(`Latest: ${latest} (npm install -g @sulala/agent)`);
+        console.error(`Latest: ${latest} (sulala update)`);
       }
     }
   }
+}
+
+function update(): void {
+  execSync('npm update -g @sulala/agent', { stdio: 'inherit' });
 }
 
 function headers(): Record<string, string> {
@@ -280,6 +285,7 @@ async function main(): Promise<void> {
   skill uninstall <slug> [--global]
   skill update [--all]
   init [dir]
+  update  — update global @sulala/agent (npm update -g @sulala/agent)
   onboard [--install-daemon] [--uninstall-daemon] [--reset]
   start   — start the agent daemon (if installed)
   stop    — stop the agent daemon
@@ -367,6 +373,9 @@ Env: GATEWAY_URL, GATEWAY_API_KEY, SULALA_SKILLS_DIR, AGENT_CONTEXT_PATH
         break;
       case 'start':
         startDaemon();
+        break;
+      case 'update':
+        update();
         break;
       default:
         throw new Error(`Unknown command: ${cmd}`);
