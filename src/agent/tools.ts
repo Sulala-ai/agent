@@ -3,8 +3,7 @@ import { resolve, relative, dirname, join } from 'path';
 import { spawnSync } from 'child_process';
 import { insertTask, getOrCreateAgentSession } from '../db/index.js';
 import { config, getPortalGatewayBase, getEffectivePortalApiKey } from '../config.js';
-import { getEffectiveStripeSecretKey } from '../channels/stripe.js';
-import { getEffectiveDiscordBotToken } from '../channels/discord.js';
+import { registerSpecTools } from './tool/spec-loader.js';
 import {
   appendMemory,
   listMemories,
@@ -12,7 +11,6 @@ import {
 } from './memory.js';
 import { addWatchPaths } from '../watcher/index.js';
 import { createPendingAction } from './pending-actions.js';
-import { getAllRequiredBins } from './skills.js';
 import { getSkillConfigEnv, getSkillToolPolicy } from './skills-config.js';
 import { redactSecretKeysInSummary } from '../redact.js';
 import { runAgentTurn } from './loop.js';
@@ -181,11 +179,12 @@ export function executeTool(
 export function registerBuiltInTools(enqueueTask: (taskId: string) => void): void {
   registerTool({
     name: 'run_task',
-    description: 'Enqueue a background task by type and optional payload. Use for scheduling work (e.g. heartbeat, file_event, or custom types).',
+    description:
+      'Enqueue a background task by type and optional payload. Use ONLY for system/scheduled task types (e.g. heartbeat, file_event, agent_job). Do NOT use for user-requested immediate results: for read/summarize email, list calendar, create invoice, or similar, use the integration tools (list_integrations_connections, get_connection_token, run_command, stripe_*) and return the result in this turn.',
     parameters: {
       type: 'object',
       properties: {
-        type: { type: 'string', description: 'Task type (e.g. heartbeat, file_event)' },
+        type: { type: 'string', description: 'Task type (e.g. heartbeat, file_event, agent_job)' },
         payload: { type: 'object', description: 'Optional JSON payload' },
       },
       required: ['type'],
@@ -201,35 +200,25 @@ export function registerBuiltInTools(enqueueTask: (taskId: string) => void): voi
     },
   });
 
-  if (process.env.ALLOW_SHELL_TOOL === '1') {
-    const envBins = (process.env.ALLOWED_BINARIES || '')
-      .split(',')
-      .map((b) => b.trim().toLowerCase())
-      .filter(Boolean);
-    const skillBins = getAllRequiredBins(config);
-    const allowed = [...new Set([...envBins, ...skillBins])];
-    registerTool({
-      name: 'run_command',
-      description: 'Run a single command (binary + args). Only binaries in the ALLOWED_BINARIES list are permitted. Use for skills that document CLI usage (e.g. memo for Apple Notes): read the skill doc, then run the commands it describes.',
-      profile: 'coding',
-      parameters: {
-        type: 'object',
-        properties: {
-          binary: { type: 'string', description: 'Executable name (e.g. memo, git). Must be in ALLOWED_BINARIES.' },
-          args: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Arguments (e.g. ["notes", "-a", "buy saiko"] for memo).',
-          },
+  registerTool({
+    name: 'run_command',
+    description: 'Run a single command (binary + args). Use for skills that document CLI usage (e.g. memo for Apple Notes, osascript): read the skill doc, then run the commands it describes.',
+    profile: 'coding',
+    parameters: {
+      type: 'object',
+      properties: {
+        binary: { type: 'string', description: 'Executable name (e.g. osascript, memo, git, curl).' },
+        args: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Arguments (e.g. ["notes", "-a", "buy saiko"] for memo).',
         },
-        required: ['binary', 'args'],
       },
-      execute: (args) => {
-        const binary = String(args.binary || '').trim().toLowerCase();
+      required: ['binary', 'args'],
+    },
+    execute: (args) => {
+        const binary = String(args.binary || '').trim();
         if (!binary) return { error: 'binary is required' };
-        if (allowed.length > 0 && !allowed.includes(binary)) {
-          return { error: `binary "${binary}" is not in ALLOWED_BINARIES (allowed: ${allowed.join(', ')})` };
-        }
         const rawArgs = Array.isArray(args.args) ? args.args : [];
         let argsList = rawArgs.map((a) => String(a).replace(/\0/g, '').trim()).filter((_, i) => i < 50);
         // Expand $PORTAL_GATEWAY_URL and $PORTAL_API_KEY in args (no shell in spawnSync, so LLM's $VAR stays literal and curl gets "Couldn't resolve host")
@@ -349,15 +338,15 @@ export function registerBuiltInTools(enqueueTask: (taskId: string) => void): voi
           return { error: (e as Error).message };
         }
       },
-    });
-  }
+  });
 
   if (config.agentWorkspaceRoot || config.workspaceDir) {
     const workspaceRoot = config.agentWorkspaceRoot ? resolve(process.cwd(), config.agentWorkspaceRoot) : null;
     const workspaceDirResolved = config.workspaceDir ? resolve(config.workspaceDir) : null;
     const workspaceSkillsDir = config.skillsWorkspaceDir ? resolve(config.skillsWorkspaceDir) : null;
+    const workspaceSkillsMyDir = config.skillsWorkspaceMyDir ? resolve(config.skillsWorkspaceMyDir) : null;
     const sulalaHomeDir = config.workspaceDir ? resolve(config.workspaceDir, '..') : null;
-    const allowedReadRoots = [workspaceRoot, workspaceDirResolved, workspaceSkillsDir, sulalaHomeDir].filter(Boolean) as string[];
+    const allowedReadRoots = [workspaceRoot, workspaceDirResolved, workspaceSkillsDir, workspaceSkillsMyDir, sulalaHomeDir].filter(Boolean) as string[];
     const defaultRoot = workspaceRoot ?? workspaceDirResolved ?? process.cwd();
     registerTool({
       name: 'read_file',
@@ -390,10 +379,10 @@ export function registerBuiltInTools(enqueueTask: (taskId: string) => void): voi
         }
       },
     });
-    const allowedWriteRoots = [workspaceRoot, workspaceDirResolved, workspaceSkillsDir].filter(Boolean) as string[];
+    const allowedWriteRoots = [workspaceRoot, workspaceDirResolved, workspaceSkillsDir, workspaceSkillsMyDir].filter(Boolean) as string[];
     registerTool({
       name: 'write_file',
-      description: 'Write content to a file. Use for scripts in workspace/scripts/, credentials in workspace/.env, or skills in workspace/skills/. Path can be relative to workspace root or absolute.',
+      description: 'Write content to a file. Use for scripts in workspace/scripts/, credentials in workspace/.env, or skills you create in workspace/skills/my/<slug>/README.md. Path can be relative to workspace root or absolute.',
       profile: 'coding',
       parameters: {
         type: 'object',
@@ -603,11 +592,11 @@ export function registerBuiltInTools(enqueueTask: (taskId: string) => void): voi
     return filtered.map((c) => ({ connection_id: c.connection_id ?? c.id ?? '', provider: c.provider }));
   }
 
-  /** List OAuth connections so the agent can get connection_id for skills (run_command + curl). Use the exact provider for the integration you need (e.g. calendar, gmail, drive, github, slack). Stripe and Discord are not OAuth; do not use this for them—use stripe_list_customers and discord_* tools instead (they use Settings → Channels). */
+  /** List OAuth connections only (calendar, gmail, drive, github, slack, etc.). Not for Stripe or Discord—use stripe_list_customers / discord_* instead. */
   registerTool({
     name: 'list_integrations_connections',
     description:
-      'List connected OAuth integrations only. Returns connection_id and provider for each. Use provider: "calendar", "gmail", "drive", "docs", "sheets", "slides", "github", "slack", "notion", "linear", "zoom", etc. Do not use for Stripe or Discord—those use API keys from Settings → Channels; use stripe_list_customers and discord_list_guilds / discord_send_message instead. Requires PORTAL_GATEWAY_URL + PORTAL_API_KEY or INTEGRATIONS_URL.',
+      'OAuth integrations only (calendar, gmail, drive, docs, sheets, slides, github, slack, notion, linear, zoom). Returns connection_id and provider. Do NOT use for Stripe or Discord—for Stripe customers use stripe_list_customers; for Discord use discord_list_guilds / discord_send_message. Requires PORTAL_GATEWAY_URL + PORTAL_API_KEY or INTEGRATIONS_URL.',
     profile: 'full',
     parameters: {
       type: 'object',
@@ -738,207 +727,11 @@ export function registerBuiltInTools(enqueueTask: (taskId: string) => void): voi
     },
   });
 
-  /** Bluesky: post via Portal OAuth. Use this for posting; run_command (curl) often uses wrong URL/path. */
-  registerTool({
-    name: 'bluesky_post',
-    description:
-      'Post a message to Bluesky. Call list_integrations_connections with provider "bluesky" to get connection_id, then call this with that connection_id and the post text (max 300 characters).',
-    profile: 'full',
-    parameters: {
-      type: 'object',
-      properties: {
-        connection_id: { type: 'string', description: 'Bluesky connection ID from list_integrations_connections (e.g. conn_bluesky_...).' },
-        text: { type: 'string', description: 'Post text (max 300 characters).' },
-      },
-      required: ['connection_id', 'text'],
+  // Register YAML spec tools; first-wins so ~/.sulala/workspace/skills (e.g. stripe) overrides ./context
+  registerSpecTools(
+    (tool) => {
+      if (!registry.has(tool.name)) registerTool(tool);
     },
-    execute: async (args) => {
-      const connectionId = typeof args.connection_id === 'string' ? args.connection_id.trim() : '';
-      const text = typeof args.text === 'string' ? args.text.trim() : '';
-      if (!connectionId) return { error: 'connection_id is required' };
-      if (!text) return { error: 'text is required' };
-      if (text.length > 300) return { error: 'Bluesky posts are limited to 300 characters' };
-      const portalGatewayBase = getPortalGatewayBase();
-      const portalKey = getEffectivePortalApiKey();
-      if (!portalGatewayBase || !portalKey) return { error: 'Set PORTAL_GATEWAY_URL and PORTAL_API_KEY (from Portal → API Keys)' };
-      const base = portalGatewayBase.replace(/\/$/, '');
-      try {
-        const useRes = await fetch(`${base}/connections/${encodeURIComponent(connectionId)}/use`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${portalKey}` },
-        });
-        if (!useRes.ok) {
-          const t = await useRes.text();
-          return { error: `Portal gateway use: ${useRes.status}`, detail: t.slice(0, 200) };
-        }
-        const useData = (await useRes.json()) as { useProxy?: boolean; blueskyDid?: string; error?: string };
-        if (useData.error) return { error: useData.error };
-        if (!useData.useProxy || !useData.blueskyDid) {
-          return { error: 'Not a Bluesky connection or missing blueskyDid; reconnect Bluesky in the Portal.' };
-        }
-        const createdAt = new Date().toISOString().replace(/\.\d{3}Z$/, '.000Z');
-        const body = {
-          path: '/xrpc/com.atproto.repo.createRecord',
-          method: 'POST',
-          body: {
-            repo: useData.blueskyDid,
-            collection: 'app.bsky.feed.post',
-            record: { $type: 'app.bsky.feed.post', text, createdAt },
-          },
-        };
-        const bskyRes = await fetch(`${base}/connections/${encodeURIComponent(connectionId)}/bsky-request`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${portalKey}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        const resText = await bskyRes.text();
-        if (!bskyRes.ok) return { error: `Bluesky request: ${bskyRes.status}`, detail: resText.slice(0, 300) };
-        let parsed: { uri?: string; error?: string };
-        try {
-          parsed = JSON.parse(resText) as { uri?: string; error?: string };
-        } catch {
-          return { error: 'Invalid JSON from Bluesky', detail: resText.slice(0, 200) };
-        }
-        if (parsed.error) return { error: parsed.error };
-        if (!parsed.uri) return { error: 'Post may have failed; response had no uri', detail: resText.slice(0, 200) };
-        return { ok: true, uri: parsed.uri, message: 'Posted to Bluesky successfully.' };
-      } catch (e) {
-        return { error: (e as Error).message };
-      }
-    },
-  });
-
-  /** Stripe: list customers using key from Settings → Channels (or STRIPE_SECRET_KEY). Do not use list_integrations_connections for Stripe. */
-  registerTool({
-    name: 'stripe_list_customers',
-    description:
-      'List Stripe customers. Uses the Stripe secret key from Settings → Channels (Stripe) or STRIPE_SECRET_KEY. Do not use list_integrations_connections for Stripe. Returns customers with id, email, name; or an error if Stripe is not configured.',
-    profile: 'full',
-    parameters: {
-      type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Max customers to return (default 10, max 100)' },
-      },
-      required: [],
-    },
-    execute: async (args) => {
-      const key = getEffectiveStripeSecretKey();
-      if (!key?.trim()) return { error: 'Stripe is not configured. Add a secret key in Settings → Channels (Stripe) or set STRIPE_SECRET_KEY.' };
-      const limit = typeof args.limit === 'number' && args.limit > 0 ? Math.min(Math.floor(args.limit), 100) : 10;
-      try {
-        const url = `https://api.stripe.com/v1/customers?limit=${limit}`;
-        const res = await fetch(url, { headers: { Authorization: `Bearer ${key}` } });
-        if (res.status === 401) return { error: 'Invalid Stripe secret key (unauthorized)' };
-        if (!res.ok) {
-          const text = await res.text();
-          return { error: `Stripe API: ${res.status}`, detail: text.slice(0, 200) };
-        }
-        const json = (await res.json()) as { data?: Array<{ id: string; email?: string; name?: string }> };
-        const data = json.data ?? [];
-        const customers = data.map((c) => ({ id: c.id, email: c.email, name: c.name }));
-        return { customers, count: customers.length };
-      } catch (e) {
-        return { error: (e as Error).message };
-      }
-    },
-  });
-
-  /** Discord: list guilds (servers) using bot token from Settings → Channels. Do not use list_integrations_connections for Discord. */
-  registerTool({
-    name: 'discord_list_guilds',
-    description:
-      'List Discord servers (guilds) the bot is in. Uses the bot token from Settings → Channels (Discord) or DISCORD_BOT_TOKEN. Do not use list_integrations_connections for Discord. Returns guilds with id and name; or an error if Discord is not configured.',
-    profile: 'full',
-    parameters: { type: 'object', properties: {}, required: [] },
-    execute: async () => {
-      const token = getEffectiveDiscordBotToken();
-      if (!token?.trim()) return { error: 'Discord is not configured. Add a bot token in Settings → Channels (Discord) or set DISCORD_BOT_TOKEN.' };
-      try {
-        const res = await fetch('https://discord.com/api/v10/users/@me/guilds', {
-          headers: { Authorization: `Bot ${token}` },
-        });
-        if (!res.ok) {
-          const text = await res.text();
-          return { error: `Discord API: ${res.status}`, detail: text.slice(0, 200) };
-        }
-        const list = (await res.json()) as Array<{ id: string; name: string }>;
-        return { guilds: list.map((g) => ({ id: g.id, name: g.name })), count: list.length };
-      } catch (e) {
-        return { error: (e as Error).message };
-      }
-    },
-  });
-
-  /** Discord: list channels in a guild. */
-  registerTool({
-    name: 'discord_list_channels',
-    description:
-      'List channels in a Discord server (guild). Uses the bot token from Settings → Channels. Call discord_list_guilds first to get guild_id. Returns channels with id, name, type (0=text, 2=voice, 4=category).',
-    profile: 'full',
-    parameters: {
-      type: 'object',
-      properties: {
-        guild_id: { type: 'string', description: 'Discord guild (server) ID from discord_list_guilds' },
-      },
-      required: ['guild_id'],
-    },
-    execute: async (args) => {
-      const token = getEffectiveDiscordBotToken();
-      if (!token?.trim()) return { error: 'Discord is not configured. Add a bot token in Settings → Channels (Discord) or set DISCORD_BOT_TOKEN.' };
-      const guildId = typeof args.guild_id === 'string' ? args.guild_id.trim() : '';
-      if (!guildId) return { error: 'guild_id is required' };
-      try {
-        const res = await fetch(`https://discord.com/api/v10/guilds/${encodeURIComponent(guildId)}/channels`, {
-          headers: { Authorization: `Bot ${token}` },
-        });
-        if (!res.ok) {
-          const text = await res.text();
-          return { error: `Discord API: ${res.status}`, detail: text.slice(0, 200) };
-        }
-        const list = (await res.json()) as Array<{ id: string; name: string; type: number }>;
-        return { channels: list.map((c) => ({ id: c.id, name: c.name, type: c.type })), count: list.length };
-      } catch (e) {
-        return { error: (e as Error).message };
-      }
-    },
-  });
-
-  /** Discord: send a message to a channel. */
-  registerTool({
-    name: 'discord_send_message',
-    description:
-      'Send a message to a Discord channel. Uses the bot token from Settings → Channels. Call discord_list_guilds then discord_list_channels to get channel_id. Max content length 2000 characters.',
-    profile: 'full',
-    parameters: {
-      type: 'object',
-      properties: {
-        channel_id: { type: 'string', description: 'Discord channel ID from discord_list_channels' },
-        content: { type: 'string', description: 'Message text (max 2000 chars)' },
-      },
-      required: ['channel_id', 'content'],
-    },
-    execute: async (args) => {
-      const token = getEffectiveDiscordBotToken();
-      if (!token?.trim()) return { error: 'Discord is not configured. Add a bot token in Settings → Channels (Discord) or set DISCORD_BOT_TOKEN.' };
-      const channelId = typeof args.channel_id === 'string' ? args.channel_id.trim() : '';
-      let content = typeof args.content === 'string' ? args.content : '';
-      if (!channelId) return { error: 'channel_id is required' };
-      if (content.length > 2000) content = content.slice(0, 2000);
-      try {
-        const res = await fetch(`https://discord.com/api/v10/channels/${encodeURIComponent(channelId)}/messages`, {
-          method: 'POST',
-          headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content }),
-        });
-        if (!res.ok) {
-          const text = await res.text();
-          return { error: `Discord API: ${res.status}`, detail: text.slice(0, 200) };
-        }
-        const data = (await res.json()) as { id: string };
-        return { ok: true, message_id: data.id };
-      } catch (e) {
-        return { error: (e as Error).message };
-      }
-    },
-  });
+    config,
+  );
 }

@@ -2,11 +2,15 @@ import { useState } from "react";
 import {
   fetchAgentSkills,
   fetchAgentSkillsRegistry,
+  fetchAgentSkillsSystemRegistry,
   fetchAgentSkillsConfig,
   fetchAgentSkillsConfigSave,
   fetchAgentSkillsUpdates,
   fetchAgentSkillsUpdate,
   fetchAgentSkillInstall,
+  fetchAgentSkillUninstall,
+  fetchAgentSkillPublish,
+  fetchAgentSkillsPublishStatus,
   fetchAgentSkillsTemplates,
 } from "@/lib/api";
 import type { AgentSkill, AgentRegistrySkill, AgentSkillsConfig, AgentSkillTemplate } from "@/lib/api";
@@ -17,16 +21,20 @@ export function useSkills(onError: (msg: string) => void) {
   const [skillsSearch, setSkillsSearch] = useState("");
   const [registrySkills, setRegistrySkills] = useState<AgentRegistrySkill[]>([]);
   const [registryLoading, setRegistryLoading] = useState(false);
+  const [systemRegistrySkills, setSystemRegistrySkills] = useState<AgentRegistrySkill[]>([]);
+  const [systemRegistryLoading, setSystemRegistryLoading] = useState(false);
   const [installingSlug, setInstallingSlug] = useState<string | null>(null);
+  const [publishingSlug, setPublishingSlug] = useState<string | null>(null);
   const [selectedHubSkill, setSelectedHubSkill] = useState<AgentRegistrySkill | null>(null);
   const [skillsUpdating, setSkillsUpdating] = useState(false);
   const [skillsConfig, setSkillsConfig] = useState<AgentSkillsConfig | null>(null);
   const [skillsConfigPath, setSkillsConfigPath] = useState<string>("~/.sulala/config.json");
   const [skillsUpdates, setSkillsUpdates] = useState<Set<string>>(new Set());
-  const [skillsTab, setSkillsTab] = useState<"installed" | "hub" | "templates">("installed");
+  const [skillsTab, setSkillsTab] = useState<"installed" | "myskills" | "hub" | "templates">("installed");
   const [templates, setTemplates] = useState<AgentSkillTemplate[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
   const [visibleSecretKeys, setVisibleSecretKeys] = useState<Record<string, boolean>>({});
+  const [publishStatusMap, setPublishStatusMap] = useState<Record<string, "pending" | "approved">>({});
   const loadSkills = () => {
     setSkillsLoading(true);
     fetchAgentSkills()
@@ -38,6 +46,7 @@ export function useSkills(onError: (msg: string) => void) {
   const loadSkillsData = () => {
     loadSkills();
     setRegistryLoading(true);
+    setSystemRegistryLoading(true);
     fetchAgentSkillsConfig()
       .then((r) => {
         setSkillsConfig(r.skills ?? null);
@@ -47,15 +56,25 @@ export function useSkills(onError: (msg: string) => void) {
     fetchAgentSkillsUpdates()
       .then((r) => setSkillsUpdates(new Set(r.updates.map((u) => u.slug))))
       .catch(() => setSkillsUpdates(new Set()));
-    fetchAgentSkillsRegistry()
-      .then((r) => setRegistrySkills(r.skills || []))
-      .catch(() => setRegistrySkills([]))
-      .finally(() => setRegistryLoading(false));
+    Promise.all([
+      fetchAgentSkillsRegistry().then((r) => setRegistrySkills(r.skills || [])).catch(() => setRegistrySkills([])),
+      fetchAgentSkillsSystemRegistry().then((r) => setSystemRegistrySkills(r.skills || [])).catch(() => setSystemRegistrySkills([])),
+    ]).finally(() => {
+      setRegistryLoading(false);
+      setSystemRegistryLoading(false);
+    });
     setTemplatesLoading(true);
     fetchAgentSkillsTemplates()
       .then((r) => setTemplates(r.templates || []))
       .catch(() => setTemplates([]))
       .finally(() => setTemplatesLoading(false));
+    fetchAgentSkillsPublishStatus()
+      .then((r) => {
+        const map: Record<string, "pending" | "approved"> = {};
+        for (const s of r.submissions) map[s.slug] = s.status as "pending" | "approved";
+        setPublishStatusMap(map);
+      })
+      .catch(() => setPublishStatusMap({}));
   };
 
   const validateSkillEnvConfig = (
@@ -111,7 +130,7 @@ export function useSkills(onError: (msg: string) => void) {
   const handleInstallSkill = async (slug: string, target: "managed" | "workspace") => {
     setInstallingSlug(slug);
     try {
-      await fetchAgentSkillInstall(slug, target);
+      await fetchAgentSkillInstall(slug, target, { system: slug.startsWith("system-") });
       loadSkills();
       const r = await fetchAgentSkillsConfig();
       setSkillsConfig(r.skills ?? null);
@@ -136,12 +155,52 @@ export function useSkills(onError: (msg: string) => void) {
     }
   };
 
+  const handleUninstallSkill = async (slug: string, source?: AgentSkill["source"]) => {
+    const target = source === "user" ? "user" : source === "installed" ? "managed" : "managed";
+    try {
+      await fetchAgentSkillUninstall(slug, target);
+      loadSkills();
+      const r = await fetchAgentSkillsConfig();
+      setSkillsConfig(r.skills ?? null);
+      if (r.configPath) setSkillsConfigPath(r.configPath);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : "Uninstall failed");
+    }
+  };
+
+  const handlePublishSkill = async (
+    slug: string,
+    options: { priceIntent: "free" | "paid"; intendedPriceCents?: number }
+  ): Promise<void> => {
+    setPublishingSlug(slug);
+    try {
+      await fetchAgentSkillPublish(slug, options);
+      onError(""); // clear any previous error
+      fetchAgentSkillsPublishStatus()
+        .then((r) => {
+          const map: Record<string, "pending" | "approved"> = {};
+          for (const s of r.submissions) map[s.slug] = s.status as "pending" | "approved";
+          setPublishStatusMap(map);
+        })
+        .catch(() => {});
+    } catch (e) {
+      onError(e instanceof Error ? e.message : "Publish failed");
+      throw e;
+    } finally {
+      setPublishingSlug(null);
+    }
+  };
+
   const refreshRegistry = () => {
     setRegistryLoading(true);
-    fetchAgentSkillsRegistry()
-      .then((r) => setRegistrySkills(r.skills || []))
-      .catch(() => setRegistrySkills([]))
-      .finally(() => setRegistryLoading(false));
+    setSystemRegistryLoading(true);
+    Promise.all([
+      fetchAgentSkillsRegistry().then((r) => setRegistrySkills(r.skills || [])).catch(() => setRegistrySkills([])),
+      fetchAgentSkillsSystemRegistry().then((r) => setSystemRegistrySkills(r.skills || [])).catch(() => setSystemRegistrySkills([])),
+    ]).finally(() => {
+      setRegistryLoading(false);
+      setSystemRegistryLoading(false);
+    });
   };
 
   const handleUseTemplate = async (
@@ -171,7 +230,10 @@ export function useSkills(onError: (msg: string) => void) {
     setSkillsSearch,
     registrySkills,
     registryLoading,
+    systemRegistrySkills,
+    systemRegistryLoading,
     installingSlug,
+    publishingSlug,
     selectedHubSkill,
     setSelectedHubSkill,
     skillsUpdating,
@@ -190,9 +252,12 @@ export function useSkills(onError: (msg: string) => void) {
     handleSkillEntryUpdate,
     handleSkillEntrySave,
     handleInstallSkill,
+    handleUninstallSkill,
+    handlePublishSkill,
     handleUseTemplate,
     handleUpdateSkills,
     refreshRegistry,
     validateSkillEnvConfig,
+    publishStatusMap,
   };
 }

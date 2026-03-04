@@ -109,11 +109,11 @@ sulala skill uninstall apple-notes [--global]
 - `sulala skill install <slug> [--global]` — install to workspace (default) or `~/.sulala/skills`
 - `sulala skill update` — refresh installed skills from the registry
 - `sulala skill uninstall <slug> [--global]` — remove a skill
-- `sulala init [dir]` — create config/context/registry and copy `.env.example` → `.env`
+- `sulala init [dir]` — create config/context and copy `.env.example` → `.env`
 
 **Onboard & daemon (global install):** Run `sulala onboard` to create `~/.sulala` and a default `.env`; the browser opens to **http://127.0.0.1:2026/onboard** to add API keys (saved to `~/.sulala/.env`). Run `sulala onboard --install-daemon` to install a background service (launchd on macOS, systemd on Linux) so the agent runs at login. Logs: `~/.sulala/logs/`. Use `sulala stop` / `sulala start` to stop or start the daemon; `sulala onboard --uninstall-daemon` to remove it.
 
-**Works on any device:** The published package includes the default skills registry and bundled skills (`registry/`, `context/`), so `sulala skill list` and the agent work out of the box. Optionally set `SKILLS_REGISTRY_URL` for a remote skills store.
+**Works on any device:** The published package includes bundled skills (`context/`). Set `SKILLS_REGISTRY_URL` to your hub (e.g. https://hub.sulala.ai/api/sulalahub/registry) to list and install skills via `sulala skill list` / `sulala skill install`.
 
 **Hub & integrations**
 
@@ -156,7 +156,7 @@ Open http://localhost:2026. Mount `./config` for watched folders; data is in a n
 - **Node.js** 18+
 - **TypeScript** + **tsx** (dev; in package.json)
 - **Python 3.10+** (optional, for AI/automation scripts)
-- SQLite (included via `better-sqlite3`)
+- SQLite via **sql.js** (WASM, no native addon or node-gyp)
 
 ## Project layout
 

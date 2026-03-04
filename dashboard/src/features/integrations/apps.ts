@@ -18,7 +18,6 @@ import {
   FolderKanban,
   Presentation,
   PenTool,
-  CreditCard,
 } from "lucide-react";
 
 export type IntegrationCategory = "featured" | "productivity" | "lifestyle";
@@ -59,8 +58,6 @@ const appMeta: IntegrationAppMeta[] = [
   { id: "jira", name: "Jira", description: "Issues and projects", category: "featured", icon: FolderKanban, logoUrl: `${LOGO_BASE}/jirasoftware` },
   { id: "slides", name: "Google Slides", description: "Presentations and slides", category: "featured", icon: Presentation, logoUrl: `${LOGO_BASE}/googleslides` },
   { id: "figma", name: "Figma", description: "Design files and prototypes", category: "featured", icon: PenTool, logoUrl: `${LOGO_BASE}/figma` },
-  { id: "discord", name: "Discord", description: "Servers and channels (bot token)", category: "featured", icon: MessageCircle, logoUrl: `${LOGO_BASE}/discord`, tokenOnly: true },
-  { id: "stripe", name: "Stripe", description: "Customers, invoices, and billing", category: "featured", icon: CreditCard, logoUrl: `${LOGO_BASE}/stripe`, tokenOnly: true },
 ];
 
 const byId = new Map<string, IntegrationAppMeta>(appMeta.map((a) => [a.id, a]));

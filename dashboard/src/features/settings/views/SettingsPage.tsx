@@ -1,5 +1,5 @@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Brain, Cpu, FileText, FolderOpen, LayoutDashboard, Link2, ListTodo, MessageCircle, Settings2 } from "lucide-react";
+import { Brain, CreditCard, Cpu, FileText, FolderOpen, LayoutDashboard, Link2, ListTodo, MessageCircle, Settings2 } from "lucide-react";
 import { OverviewPage } from "@/features/overview";
 import { AIProvidersTab } from "./AIProvidersTab";
 import { TasksPage } from "@/features/tasks";
@@ -7,9 +7,11 @@ import { LogsPage } from "@/features/logs";
 import { FilesPage } from "@/features/files";
 import { ConfigPage } from "@/features/config";
 import { ChannelsPage } from "./ChannelsPage";
+import { PaymentPage } from "./PaymentPage";
 import { MemoryPage } from "./MemoryPage";
 import { PortalSettingsCard } from "@/features/integrations/components/PortalSettingsCard";
-import { fetchOAuthConnectUrl } from "@/lib/api";
+import { StorePublishSettingsCard } from "@/features/integrations/components/StorePublishSettingsCard";
+import { fetchOAuthConnectUrl, getHubBaseUrl } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { WsEvent } from "@/hooks/useWebSocket";
 import type { Config, FileState, Log, Task } from "@/lib/api";
@@ -43,6 +45,7 @@ const SETTINGS_NAV = [
   { value: "files", label: "File states", icon: FolderOpen },
   { value: "ai-providers", label: "AI Providers", icon: Cpu },
   { value: "channels", label: "Channels", icon: MessageCircle },
+  { value: "payment", label: "Payment", icon: CreditCard },
   { value: "memory", label: "Memory", icon: Brain },
   { value: "portal", label: "Portal", icon: Link2 },
   { value: "config", label: "Watched folders", icon: Settings2 },
@@ -108,6 +111,9 @@ export function SettingsPage(props: SettingsPageProps) {
             <TabsContent value="channels" className="mt-0 flex-1 data-[state=inactive]:hidden">
               <ChannelsPage />
             </TabsContent>
+            <TabsContent value="payment" className="mt-0 flex-1 data-[state=inactive]:hidden">
+              <PaymentPage />
+            </TabsContent>
             <TabsContent value="memory" className="mt-0 flex-1 data-[state=inactive]:hidden">
               <MemoryPage />
             </TabsContent>
@@ -134,6 +140,8 @@ function PortalTab({ config, onError }: { config: Config | null; onError?: (msg:
     // In Electron the URL opens in system browser and window.open returns null; that's expected.
   };
 
+  const storeBaseUrl = getHubBaseUrl();
+
   return (
     <div className="flex flex-col gap-4">
       <PortalSettingsCard
@@ -141,6 +149,10 @@ function PortalTab({ config, onError }: { config: Config | null; onError?: (msg:
         onError={onError}
         portalOAuthConnectAvailable={portalOAuthConnectAvailable}
         onOAuthConnect={portalOAuthConnectAvailable ? handleOAuthConnect : undefined}
+      />
+      <StorePublishSettingsCard
+        storeBaseUrl={storeBaseUrl}
+        onError={onError}
       />
     </div>
   );

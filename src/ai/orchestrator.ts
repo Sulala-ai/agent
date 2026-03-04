@@ -15,6 +15,28 @@ export function getProvider(name?: string | null): AIAdapter {
   return p;
 }
 
+/** Format messages as a single prompt for the v1/completions endpoint (non-chat models). */
+function messagesToPrompt(
+  messages: Array<{ role: string; content?: string | null }>
+): string {
+  return (messages ?? [])
+    .map((m) => {
+      const text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '');
+      const role = m.role === 'system' ? 'System' : m.role === 'assistant' ? 'Assistant' : 'User';
+      return `${role}:\n${text}`;
+    })
+    .join('\n\n');
+}
+
+function isNotChatModelError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    msg.includes('not a chat model') ||
+    msg.includes('v1/completions') ||
+    msg.includes('chat/completions')
+  );
+}
+
 export type StreamChunkEvent =
   | { type: 'delta'; content: string }
   | { type: 'thinking'; delta: string }
@@ -187,7 +209,7 @@ export async function completeStream(
   const createOpts: Record<string, unknown> = {
     model: model || streamDefaultModel,
     messages: openAiMessages,
-    max_tokens,
+    max_completion_tokens: max_tokens,
     stream: true,
   };
   if (tools?.length) {
@@ -198,10 +220,27 @@ export async function completeStream(
   }
 
   const createOptions = options.signal ? { signal: options.signal } : {};
-  const stream = await (streamClient.chat.completions.create as (opts: unknown, opts2?: { signal?: AbortSignal }) => Promise<AsyncIterable<unknown>>)(createOpts, createOptions) as AsyncIterable<{
+  let stream: AsyncIterable<{
     choices?: { delta?: { content?: string; tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }> }; finish_reason?: string }[];
     usage?: Record<string, number>;
   }>;
+  try {
+    stream = await (streamClient.chat.completions.create as (opts: unknown, opts2?: { signal?: AbortSignal }) => Promise<AsyncIterable<unknown>>)(createOpts, createOptions) as AsyncIterable<{
+      choices?: { delta?: { content?: string; tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }> }; finish_reason?: string }[];
+      usage?: Record<string, number>;
+    }>;
+  } catch (streamErr) {
+    const status = (streamErr as { status?: number }).status;
+    const useCompletionsFallback =
+      provider === 'openrouter' &&
+      (isNotChatModelError(streamErr) || status === 404 || (status === 400 && isNotChatModelError(streamErr)));
+    if (useCompletionsFallback) {
+      const result = await complete({ ...options, provider, messages, model, max_tokens, tools, signal: options.signal });
+      onChunk({ type: 'finish', content: result.content ?? '', tool_calls: result.tool_calls, usage: result.usage });
+      return { content: result.content ?? '', tool_calls: result.tool_calls, usage: result.usage };
+    }
+    throw streamErr;
+  }
   let content = '';
   const toolCallByIndex: Record<number, { id: string; name: string; arguments: string }> = {};
   let usage: Record<string, number> | undefined;
@@ -385,7 +424,7 @@ async function registerAllProviders(): Promise<void> {
           const createOpts: Record<string, unknown> = {
             model: model || OPENAI_DEFAULT,
             messages: openAiMessages,
-            max_tokens: max_tokens || 1024,
+            max_completion_tokens: max_tokens || 1024,
           };
           if (toolsOpt?.length) {
             createOpts.tools = toolsOpt.map((t) => ({
@@ -439,7 +478,7 @@ async function registerAllProviders(): Promise<void> {
           const createOpts: Record<string, unknown> = {
             model: model || OPENROUTER_DEFAULT,
             messages: openAiMessages,
-            max_tokens: max_tokens || 1024,
+            max_completion_tokens: max_tokens || 1024,
           };
           if (toolsOpt?.length) {
             createOpts.tools = toolsOpt.map((t) => ({
@@ -447,19 +486,56 @@ async function registerAllProviders(): Promise<void> {
               function: { name: t.name, description: t.description, parameters: t.parameters ?? {} },
             }));
           }
-          const res = await (client.chat.completions.create as (opts: unknown, opts2?: { signal?: AbortSignal }) => Promise<unknown>)(createOpts, signal ? { signal } : undefined) as { choices?: { message?: { content?: string; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> } }[]; usage?: Record<string, number> };
-          const choice = res.choices?.[0];
-          const msg = choice?.message;
-          const tool_calls = msg?.tool_calls?.map((tc) => ({
-            id: tc.id,
-            name: tc.function?.name ?? '',
-            arguments: tc.function?.arguments ?? '',
-          }));
-          return {
-            content: msg?.content ?? '',
-            usage: res.usage ?? {},
-            ...(tool_calls?.length ? { tool_calls } : {}),
-          };
+          try {
+            const res = await (client.chat.completions.create as (opts: unknown, opts2?: { signal?: AbortSignal }) => Promise<unknown>)(createOpts, signal ? { signal } : undefined) as { choices?: { message?: { content?: string; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> } }[]; usage?: Record<string, number> };
+            const choice = res.choices?.[0];
+            const msg = choice?.message;
+            const tool_calls = msg?.tool_calls?.map((tc) => ({
+              id: tc.id,
+              name: tc.function?.name ?? '',
+              arguments: tc.function?.arguments ?? '',
+            }));
+            return {
+              content: msg?.content ?? '',
+              usage: res.usage ?? {},
+              ...(tool_calls?.length ? { tool_calls } : {}),
+            };
+          } catch (chatErr) {
+            const errAny = chatErr as { status?: number; response?: { status?: number } };
+            const status = errAny?.status ?? errAny?.response?.status;
+            const msg = chatErr instanceof Error ? chatErr.message : String(chatErr);
+            const isCompletionsModel =
+              isNotChatModelError(chatErr) ||
+              status === 404 ||
+              (status === 400 && msg.includes('completions'));
+            if (!isCompletionsModel) throw chatErr;
+            // Fallback: non-chat model — use v1/completions with a single prompt (no tools).
+            const prompt = messagesToPrompt(messages ?? []);
+            const body = {
+              model: model || OPENROUTER_DEFAULT,
+              prompt,
+              max_tokens: max_tokens || 1024,
+            };
+            const compRes = await fetch('https://openrouter.ai/api/v1/completions', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${apiKey}`,
+              },
+              body: JSON.stringify(body),
+              signal,
+            });
+            if (!compRes.ok) {
+              const errText = await compRes.text();
+              throw new Error(`OpenRouter completions: ${compRes.status} ${errText}`);
+            }
+            const compData = (await compRes.json()) as {
+              choices?: { text?: string }[];
+              usage?: Record<string, number>;
+            };
+            const text = compData.choices?.[0]?.text ?? '';
+            return { content: text, usage: compData.usage ?? {} };
+          }
         },
       });
     }

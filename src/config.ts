@@ -3,6 +3,15 @@ import { readFileSync, existsSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
 /** Use os.homedir() for cross-platform home (Unix: $HOME / Windows: USERPROFILE). */
 import { homedir } from 'os';
+
+function expandTilde(p: string | undefined): string | undefined {
+  if (!p || typeof p !== 'string') return undefined;
+  const t = p.trim();
+  if (t === '~') return homedir();
+  if (t.startsWith('~/') || t.startsWith('~\\')) return join(homedir(), t.slice(2));
+  if (t.startsWith('~' + join('', '/')) && t.length > 1) return join(homedir(), t.slice(2));
+  return t || undefined;
+}
 import { fileURLToPath } from 'url';
 import type { Config } from './types.js';
 
@@ -10,7 +19,7 @@ import type { Config } from './types.js';
 const SULALA_ENV_LOAD_KEYS = [
   'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY', 'GOOGLE_GEMINI_API_KEY', 'GEMINI_API_KEY',
   'OLLAMA_BASE_URL', 'AI_DEFAULT_PROVIDER', 'GATEWAY_API_KEY', 'PORTAL_GATEWAY_URL', 'PORTAL_API_KEY',
-  'ALLOWED_BINARIES',
+  'STORE_PUBLISH_API_KEY', 'ALLOWED_BINARIES', 'STRIPE_SECRET_KEY',
 ];
 (function loadSulalaEnv() {
   const path = join(homedir(), '.sulala', '.env');
@@ -154,7 +163,7 @@ export const config: Config = {
   agentToolProfile: parseToolProfile(process.env.AGENT_TOOL_PROFILE),
   agentToolRetryCount: parseInt(process.env.AGENT_TOOL_RETRY_COUNT || '2', 10) || 0,
   agentExecutionPreview: process.env.AGENT_EXECUTION_PREVIEW === '1' || process.env.AGENT_EXECUTION_PREVIEW === 'true',
-  agentUsePi: process.env.AGENT_USE_PI === '1' || process.env.AGENT_USE_PI === 'true',
+  agentUsePi: process.env.AGENT_USE_PI !== '0' && process.env.AGENT_USE_PI !== 'false',
   agentSharedMemoryKey: (process.env.AGENT_SHARED_MEMORY_KEY || '').trim() || null,
   integrationsUrl: (process.env.INTEGRATIONS_URL || '').trim() || null,
   portalGatewayUrl: (process.env.PORTAL_GATEWAY_URL || '').trim() || null,
@@ -166,12 +175,19 @@ export const config: Config = {
   workspaceDir:
     process.env.SULALA_WORKSPACE_DIR ||
     join(homedir(), '.sulala', 'workspace'),
-  /** User workspace skills; path is resolved from homedir() so it works on all OSes. */
+  /** User workspace skills; path is resolved from homedir() so it works on all OSes. ~ in env is expanded. */
   skillsWorkspaceDir:
-    process.env.SULALA_WORKSPACE_SKILLS_DIR ||
+    expandTilde(process.env.SULALA_WORKSPACE_SKILLS_DIR) ||
     join(homedir(), '.sulala', 'workspace', 'skills'),
+  /** "Created by me" skills dir (default: skillsWorkspaceDir + '/my'). Env SULALA_WORKSPACE_SKILLS_MY_DIR. */
+  skillsWorkspaceMyDir:
+    expandTilde(process.env.SULALA_WORKSPACE_SKILLS_MY_DIR) ||
+    join(
+      expandTilde(process.env.SULALA_WORKSPACE_SKILLS_DIR) || join(homedir(), '.sulala', 'workspace', 'skills'),
+      'my'
+    ),
   skillsManagedDir:
-    process.env.SULALA_SKILLS_DIR || join(homedir(), '.sulala', 'skills'),
+    expandTilde(process.env.SULALA_SKILLS_DIR) || join(homedir(), '.sulala', 'skills'),
   skillsExtraDirs: (process.env.SKILLS_EXTRA_DIRS || '')
     .split(',')
     .map((s) => s.trim())

@@ -2,7 +2,7 @@ import chokidar, { type FSWatcher } from 'chokidar';
 import { statSync } from 'fs';
 import type { Stats } from 'fs';
 import { config } from '../config.js';
-import { initDb, getDb, log, upsertFileState, insertTask } from '../db/index.js';
+import { getDb, log, upsertFileState, insertTask } from '../db/index.js';
 import { getWatchFoldersFromAutomations } from '../workspace-automations.js';
 import { enqueue } from '../scheduler/queue.js';
 
@@ -51,7 +51,6 @@ export function startWatcher(
   options: { ignoreInitial?: boolean } = {}
 ): FSWatcher | null {
   if (watcher) return watcher;
-  initDb(config.dbPath);
   const paths = folders?.length ? folders : config.watchFolders;
   if (!paths.length) {
     console.log('[watcher] Not started — no watch folders configured');

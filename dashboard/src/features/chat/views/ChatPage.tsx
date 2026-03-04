@@ -148,7 +148,7 @@ function ChatMessage({
     const userContent = userContentWithImages(m.content);
     return (
       <div className="flex items-start gap-2 justify-end">
-        <div className="border-border bg-muted/30 flex max-w-[85%] flex-col gap-0.5 rounded-lg rounded-tr-sm px-3 py-2 text-sm">
+        <div className="border-border bg-muted/30 flex max-w-[min(85%,42rem)] flex-col gap-0.5 rounded-lg rounded-tr-sm px-3 py-2 text-sm">
           <div className="chat-markdown text-foreground break-words [&>*:last-child]:mb-0">
             <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
               {userContent}
@@ -173,7 +173,7 @@ function ChatMessage({
         <div className="size-8 shrink-0 flex items-center justify-center overflow-hidden rounded-full bg-muted">
           <img src="/icon.svg" alt="" className="size-5 dark:hidden" aria-hidden /><img src="/logo_white.svg" alt="" className="size-5 hidden dark:block" aria-hidden />
         </div>
-        <div className="border-border bg-muted/30 flex max-w-[85%] flex-1 flex-col gap-0.5 rounded-lg rounded-tl-sm px-3 py-2 text-sm">
+        <div className="border-border bg-muted/30 flex max-w-[min(85%,42rem)] flex-1 flex-col gap-0.5 rounded-lg rounded-tl-sm px-3 py-2 text-sm">
           {(m.thinking ?? "") && (
             <details className="text-muted-foreground border-border mb-2 rounded border border-dashed py-1.5 pl-2 pr-2 text-xs" open={isStreaming}>
               <summary className="cursor-pointer font-medium flex items-center gap-2">
@@ -626,8 +626,8 @@ export function ChatPage(props: ChatPageProps) {
             ))}
           </div>
         )}
-        <div className="flex gap-2">
-          <label className="cursor-pointer rounded-md border border-input px-2 py-2 text-muted-foreground hover:bg-muted/50">
+        <div className="flex gap-2 items-end">
+          <label className="cursor-pointer shrink-0 rounded-md border border-input px-2 py-2 text-muted-foreground hover:bg-muted/50">
             <input
               type="file"
               accept="image/*"
@@ -641,12 +641,18 @@ export function ChatPage(props: ChatPageProps) {
             />
             <ImagePlus className="h-5 w-5" aria-hidden />
           </label>
-          <input
-            className="border-input bg-background flex-1 rounded-md border px-3 py-2 text-sm"
+          <textarea
+            className="border-input bg-background field-sizing-content min-h-10 max-h-48 w-full min-w-0 flex-1 resize-none rounded-md border px-3 py-2 text-sm leading-relaxed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             placeholder="Type a message…"
             value={chatInput}
             onChange={(e) => setChatInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleChatSend()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                handleChatSend();
+              }
+            }}
+            rows={1}
           />
           <Button
             onClick={handleChatSend}

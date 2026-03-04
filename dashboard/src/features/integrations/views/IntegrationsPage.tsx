@@ -296,7 +296,7 @@ function AppCard({
         )}
         {isStripe && isTokenOnly && (
           <p className="text-muted-foreground mt-0.5 text-xs">
-            Set Secret Key in Settings → Channels (Stripe) or <code className="rounded bg-muted px-1">STRIPE_SECRET_KEY</code> in agent .env. Click to open Stripe API keys.
+            Set Secret Key in Settings → Payment or <code className="rounded bg-muted px-1">STRIPE_SECRET_KEY</code> in agent .env. Click to open Stripe API keys.
           </p>
         )}
       </div>

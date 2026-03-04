@@ -88,7 +88,7 @@ async function runAgentJobAndNotify(payload: unknown): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  initDb(config.dbPath);
+  await initDb(config.dbPath);
   if (process.env.SULALA_OLLAMA_AUTO_INSTALL === '1') {
     ensureOllamaInstalled();
   } else {

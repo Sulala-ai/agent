@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, unlinkSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, unlinkSync, rmSync } from 'fs';
 import { homedir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -19,13 +19,9 @@ export type RegistryIndex = {
   skills: RegistrySkill[];
 };
 
-const DEFAULT_HUB_BASE =  'http://localhost:3002';
-
 function getRegistryUrl(overrideUrl?: string): string | null {
-  const explicit = overrideUrl?.trim() || process.env.SKILLS_REGISTRY_URL?.trim();
-  if (explicit) return explicit;
-  const hubBase = process.env.SULALAHUB_BASE_URL?.trim() || DEFAULT_HUB_BASE;
-  return `${hubBase.replace(/\/$/, '')}/api/sulalahub/registry`;
+  const url = overrideUrl?.trim() || process.env.SKILLS_REGISTRY_URL?.trim();
+  return url || null;
 }
 
 export async function getRegistrySkills(overrideUrl?: string): Promise<RegistrySkill[]> {
@@ -95,11 +91,19 @@ function getManagedDir(): string {
   return process.env.SULALA_SKILLS_DIR || join(homedir(), '.sulala', 'skills');
 }
 
-/** Workspace skills dir: ~/.sulala/workspace/skills/<skill-name>/SKILL.md. Used for installs (safe from project updates). */
+/** Workspace skills dir: ~/.sulala/workspace/skills/<slug>/README.md (and optional tools.yaml). Used for hub installs (outside project). */
 function getWorkspaceSkillsDir(): string {
   return (
     process.env.SULALA_WORKSPACE_SKILLS_DIR ||
     join(homedir(), '.sulala', 'workspace', 'skills')
+  );
+}
+
+/** "Created by me" skills dir: ~/.sulala/workspace/skills/my/<slug>/. */
+function getWorkspaceSkillsMyDir(): string {
+  return (
+    process.env.SULALA_WORKSPACE_SKILLS_MY_DIR ||
+    join(getWorkspaceSkillsDir(), 'my')
   );
 }
 
@@ -109,7 +113,7 @@ function getWorkspaceDir(): string {
   return join(cwd, path.trim());
 }
 
-export type InstallTarget = 'managed' | 'workspace';
+export type InstallTarget = 'managed' | 'workspace' | 'user';
 
 export type InstallSkillOptions = { registryUrl?: string };
 
@@ -148,16 +152,57 @@ export async function installSkill(
   const dir = target === 'managed' ? getWorkspaceSkillsDir() : getWorkspaceDir();
   const destPath =
     target === 'managed'
-      ? join(dir, slug, 'SKILL.md')
+      ? join(dir, slug, 'README.md')
       : join(dir, `${slug}.md`);
   mkdirSync(dirname(destPath), { recursive: true });
   writeFileSync(destPath, content, 'utf8');
+  if (target === 'managed' && entry.url) {
+    try {
+      const toolsUrl = `${entry.url.replace(/\/$/, '')}/tools`;
+      const toolsRes = await fetch(toolsUrl);
+      if (toolsRes.ok) {
+        const toolsYaml = await toolsRes.text();
+        if (toolsYaml.trim()) {
+          writeFileSync(join(dir, slug, 'tools.yaml'), toolsYaml, 'utf8');
+        }
+      }
+    } catch {
+      // optional tools.yaml; ignore fetch errors
+    }
+  }
   if (entry.version) {
     const versions = loadInstalledVersions();
     versions[slug] = { version: entry.version, target };
     saveInstalledVersions(versions);
   }
   return { success: true, path: destPath };
+}
+
+/** System registry URL when SKILLS_REGISTRY_URL is set. */
+function getSystemRegistryUrl(): string | null {
+  const base = process.env.SKILLS_REGISTRY_URL?.trim()?.replace(/\/$/, '');
+  return base ? `${base}/api/sulalahub/system/registry` : null;
+}
+
+/**
+ * Install all system skills from the hub into workspace skills dir (~/.sulala/workspace/skills/<slug>/).
+ * Used after onboarding so new users get default system skills. Skips if SKILLS_REGISTRY_URL is not set.
+ */
+export async function installAllSystemSkills(): Promise<{
+  installed: string[];
+  failed: { slug: string; error: string }[];
+}> {
+  const registryUrl = getSystemRegistryUrl();
+  if (!registryUrl) return { installed: [], failed: [] };
+  const skills = await getRegistrySkills(registryUrl);
+  const installed: string[] = [];
+  const failed: { slug: string; error: string }[] = [];
+  for (const s of skills) {
+    const result = await installSkill(s.slug, 'managed', { registryUrl });
+    if (result.success) installed.push(s.slug);
+    else if (result.error) failed.push({ slug: s.slug, error: result.error });
+  }
+  return { installed, failed };
 }
 
 /**
@@ -186,10 +231,24 @@ export async function installSkillFromUrl(
     const dir = target === 'managed' ? getWorkspaceSkillsDir() : getWorkspaceDir();
     const destPath =
       target === 'managed'
-        ? join(dir, slug, 'SKILL.md')
+        ? join(dir, slug, 'README.md')
         : join(dir, `${slug}.md`);
     mkdirSync(dirname(destPath), { recursive: true });
     writeFileSync(destPath, content, 'utf8');
+    if (target === 'managed') {
+      try {
+        const toolsUrl = `${url.origin}${url.pathname.replace(/\/$/, '')}/tools`;
+        const toolsRes = await fetch(toolsUrl);
+        if (toolsRes.ok) {
+          const toolsYaml = await toolsRes.text();
+          if (toolsYaml.trim()) {
+            writeFileSync(join(dir, slug, 'tools.yaml'), toolsYaml, 'utf8');
+          }
+        }
+      } catch {
+        // optional
+      }
+    }
     return { success: true, path: destPath, slug };
   } catch (e) {
     return {
@@ -204,9 +263,63 @@ export function uninstallSkill(
   slug: string,
   target: InstallTarget
 ): { success: boolean; path: string; error?: string } {
+  if (target === 'user') {
+    const dir = getWorkspaceSkillsMyDir();
+    const skillDir = join(dir, slug);
+    if (!existsSync(skillDir)) {
+      return { success: false, path: '', error: `Skill not found: ${slug}` };
+    }
+    try {
+      rmSync(skillDir, { recursive: true });
+      const versions = loadInstalledVersions();
+      delete versions[slug];
+      saveInstalledVersions(versions);
+      return { success: true, path: skillDir };
+    } catch (e) {
+      return {
+        success: false,
+        path: '',
+        error: `Failed to remove ${skillDir}: ${(e as Error).message}`,
+      };
+    }
+  }
   const dir = target === 'managed' ? getWorkspaceSkillsDir() : getWorkspaceDir();
-  const filePath =
-    target === 'managed' ? join(dir, slug, 'SKILL.md') : join(dir, `${slug}.md`);
+  if (target === 'managed') {
+    const skillDir = join(dir, slug);
+    const legacyFile = join(getManagedDir(), `${slug}.md`);
+    if (existsSync(skillDir)) {
+      try {
+        rmSync(skillDir, { recursive: true });
+        const versions = loadInstalledVersions();
+        delete versions[slug];
+        saveInstalledVersions(versions);
+        return { success: true, path: skillDir };
+      } catch (e) {
+        return {
+          success: false,
+          path: '',
+          error: `Failed to remove ${skillDir}: ${(e as Error).message}`,
+        };
+      }
+    }
+    if (existsSync(legacyFile)) {
+      try {
+        unlinkSync(legacyFile);
+        const versions = loadInstalledVersions();
+        delete versions[slug];
+        saveInstalledVersions(versions);
+        return { success: true, path: legacyFile };
+      } catch (e) {
+        return {
+          success: false,
+          path: '',
+          error: `Failed to remove ${legacyFile}: ${(e as Error).message}`,
+        };
+      }
+    }
+    return { success: false, path: '', error: `Skill not installed: ${slug}` };
+  }
+  const filePath = join(dir, `${slug}.md`);
   if (!existsSync(filePath)) {
     return { success: false, path: '', error: `Skill not installed: ${slug}` };
   }
@@ -232,13 +345,14 @@ function getInstalledSkills(): { slug: string; target: InstallTarget }[] {
   const workspaceSkills = getWorkspaceSkillsDir();
   const managedLegacy = getManagedDir();
   const workspace = getWorkspaceDir();
-  // Managed (workspace dir): ~/.sulala/workspace/skills/<slug>/SKILL.md
+  // Managed (workspace dir): ~/.sulala/workspace/skills/<slug>/README.md or SKILL.md (exclude "my" — that's for user-created, not hub installs)
   if (existsSync(workspaceSkills)) {
     try {
       for (const n of readdirSync(workspaceSkills, { withFileTypes: true })) {
-        if (!n.isDirectory() || n.name.startsWith('.')) continue;
-        const skillPath = join(workspaceSkills, n.name, 'SKILL.md');
-        if (!existsSync(skillPath)) continue;
+        if (!n.isDirectory() || n.name.startsWith('.') || n.name === 'my') continue;
+        const readme = join(workspaceSkills, n.name, 'README.md');
+        const skillMd = join(workspaceSkills, n.name, 'SKILL.md');
+        if (!existsSync(readme) && !existsSync(skillMd)) continue;
         const slug = n.name;
         if (!seen.has(slug)) {
           seen.add(slug);

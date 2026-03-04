@@ -40,7 +40,7 @@ This doc outlines how to evolve Sulala Agent into a **powerful agent runner**: m
 ### Phase 5: More tools + robustness ✅
 
 - **Done:** **read_file** (workspace-scoped when `AGENT_WORKSPACE_ROOT` is set); **write_file** (same scope).
-- **Done:** **run_command** (exec) when `ALLOW_SHELL_TOOL=1`, allowlist via `ALLOWED_BINARIES`.
+- **Done:** **run_command** (exec) — always registered.
 - **Done:** **Tool safety:** `AGENT_TOOL_ALLOWLIST` (comma-separated names); `AGENT_TOOL_PROFILE` = `full` | `messaging` | `coding` | `minimal`. Filter applied at list and execute.
 - **Done:** **Message compaction:** `AGENT_MAX_HISTORY_MESSAGES` (drop older messages); `AGENT_MAX_CONTEXT_TOKENS` (estimate ~4 chars/token, truncate from front).
 - **Done:** **runId + WebSocket:** Stream endpoint sends `event: start` with `runId`; all events broadcast on WS as `{ type: 'agent_stream', runId, event, data }`. **POST /api/agent/run** accepts `session_id` or `session_key`, `message`, etc.; returns `202 { runId, sessionId }` and runs in background, streaming only via WS.

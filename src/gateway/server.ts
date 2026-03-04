@@ -35,13 +35,13 @@ import {
 import { scheduleCronById, unscheduleJob } from '../scheduler/cron.js';
 import { getTelegramChannelState, setTelegramChannelConfig } from '../channels/telegram.js';
 import { getDiscordChannelState, setDiscordChannelConfig } from '../channels/discord.js';
-import { getStripeChannelState, setStripeChannelConfig } from '../channels/stripe.js';
+import { getEffectiveStripeSecretKey, getStripeChannelState, setStripeChannelConfig } from '../channels/stripe.js';
 import { reloadProviders } from '../ai/orchestrator.js';
 import { runAgentTurn, runAgentTurnStream } from '../agent/loop.js';
 import { runAgentTurnWithPi, isPiAvailable } from '../agent/pi-runner.js';
 import { listTools, executeTool } from '../agent/tools.js';
 import { listSkills, getAllRequiredBins } from '../agent/skills.js';
-import { getRegistrySkills, getAvailableUpdates, installSkill, uninstallSkill, updateSkillsAll } from '../agent/skill-install.js';
+import { getRegistrySkills, getAvailableUpdates, installSkill, uninstallSkill, updateSkillsAll, installAllSystemSkills } from '../agent/skill-install.js';
 import { getTemplates } from '../agent/skill-templates.js';
 import { generateSkillSpec, writeGeneratedSkill, WIZARD_APPS, WIZARD_TRIGGERS } from '../agent/skill-generate.js';
 import { loadSkillsConfig, saveSkillsConfig, getConfigPath, setSkillEnabled, removeSkillEntry, migrateConfigNameKeysToSlug, getOnboardingComplete, setOnboardingComplete } from '../agent/skills-config.js';
@@ -93,6 +93,17 @@ function rateLimitMiddleware(req: Request, res: Response, next: () => void): voi
   next();
 }
 
+/** Store base URL for publishing skills (POST /api/submissions). Derived from SKILLS_REGISTRY_URL origin. */
+function getStorePublishBaseUrl(): string | null {
+  const registryUrl = (process.env.SKILLS_REGISTRY_URL || '').trim();
+  if (!registryUrl) return null;
+  try {
+    return new URL(registryUrl).origin;
+  } catch {
+    return null;
+  }
+}
+
 export function createGateway(appMount: Express | null = null): Express {
   const app = appMount || express();
   app.use(cors());
@@ -116,10 +127,19 @@ export function createGateway(appMount: Express | null = null): Express {
     });
   }
 
-  /** SulalaHub: public skills registry. Set SKILLS_REGISTRY_URL to use this. */
+  /** SulalaHub: public skills registry. When serving, base URL for skill links is derived from SKILLS_REGISTRY_URL (origin) or host:port. */
   app.get('/api/sulalahub/registry', (_req: Request, res: Response) => {
     try {
-      const baseUrl = process.env.SULALAHUB_BASE_URL || `http://${config.host}:${config.port}`;
+      const registryUrl = process.env.SKILLS_REGISTRY_URL?.trim();
+      const baseUrl = registryUrl
+        ? (() => {
+            try {
+              return new URL(registryUrl).origin;
+            } catch {
+              return `http://${config.host}:${config.port}`;
+            }
+          })()
+        : `http://${config.host}:${config.port}`;
       const registryPath = join(registryDir, 'skills-registry.json');
       if (!existsSync(registryPath)) {
         res.json({ skills: [] });
@@ -188,12 +208,18 @@ export function createGateway(appMount: Express | null = null): Express {
     }
   });
 
-  /** Onboard: mark onboarding as complete. */
+  /** Onboard: mark onboarding as complete. Installs all system skills to workspace/skills in the background when SKILLS_REGISTRY_URL is set. */
   app.put('/api/onboard/complete', async (_req: Request, res: Response) => {
     try {
       setOnboardingComplete(true);
       await reloadProviders();
       res.json({ ok: true, complete: true });
+      installAllSystemSkills()
+        .then(({ installed, failed }) => {
+          if (installed.length) log('gateway', 'info', `Onboard: installed ${installed.length} system skill(s): ${installed.join(', ')}`);
+          if (failed.length) log('gateway', 'warn', `Onboard: failed to install ${failed.length} system skill(s): ${failed.map((f) => f.slug).join(', ')}`);
+        })
+        .catch((e) => log('gateway', 'error', `Onboard: system skills install failed: ${(e as Error).message}`));
     } catch (e) {
       log('gateway', 'error', (e as Error).message);
       res.status(500).json({ error: (e as Error).message });
@@ -436,6 +462,9 @@ export function createGateway(appMount: Express | null = null): Express {
         res.status(400).json({ error: result.error || 'Failed to save' });
         return;
       }
+      // Persist to ~/.sulala/.env so the key is visible there and survives across DB resets
+      const effective = getEffectiveStripeSecretKey();
+      writeOnboardEnvKeys({ STRIPE_SECRET_KEY: effective ?? '' });
       const state = getStripeChannelState();
       res.json(state);
     } catch (e) {
@@ -870,9 +899,10 @@ export function createGateway(appMount: Express | null = null): Express {
         res.status(400).json({ error: 'slug required' });
         return;
       }
-      const t = target === 'managed' ? 'managed' : 'workspace';
+      const t = target === 'user' ? 'user' : target === 'managed' ? 'managed' : 'workspace';
       const result = uninstallSkill(slug, t);
       if (result.success) {
+        removeSkillEntry(slug);
         res.json({ uninstalled: slug, path: result.path, target: t });
       } else {
         res.status(400).json({ error: result.error || 'Uninstall failed' });
@@ -880,6 +910,94 @@ export function createGateway(appMount: Express | null = null): Express {
     } catch (e) {
       log('gateway', 'error', (e as Error).message);
       res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
+  /** Publish a user-created skill to the store (POST to store /api/submissions). No API key required by default; set STORE_PUBLISH_API_KEY if the store requires it. */
+  app.post('/api/agent/skills/publish', async (req: Request, res: Response) => {
+    try {
+      const { slug, priceIntent, intendedPriceCents } = req.body || {};
+      if (!slug || typeof slug !== 'string') {
+        res.status(400).json({ error: 'slug required' });
+        return;
+      }
+      const skills = listSkills(config, { includeDisabled: true });
+      const skill = skills.find((s) => (s.slug ?? s.filePath.split(/[/\\]/).pop()?.replace(/\.md$/, '')) === slug && s.source === 'user');
+      if (!skill) {
+        res.status(400).json({ error: 'Skill not found or not a user-created skill. Only skills in My skills can be published.' });
+        return;
+      }
+      const skillDir = join(config.skillsWorkspaceMyDir, slug);
+      const readmePath = join(skillDir, 'README.md');
+      const skillPath = join(skillDir, 'SKILL.md');
+      const mdPath = existsSync(readmePath) ? readmePath : existsSync(skillPath) ? skillPath : null;
+      if (!mdPath) {
+        res.status(400).json({ error: 'Skill README.md or SKILL.md not found' });
+        return;
+      }
+      const markdown = readFileSync(mdPath, 'utf8');
+      const toolsPath = join(skillDir, 'tools.yaml');
+      const toolsYaml = existsSync(toolsPath) ? readFileSync(toolsPath, 'utf8').trim() : undefined;
+      const storeBase = getStorePublishBaseUrl();
+      if (!storeBase) {
+        res.status(400).json({
+          error: 'Store URL not configured. Set SKILLS_REGISTRY_URL to your hub (e.g. https://hub.sulala.ai or http://localhost:3002).',
+        });
+        return;
+      }
+      const submitUrl = `${storeBase.replace(/\/$/, '')}/api/submissions`;
+      const body: Record<string, unknown> = {
+        slug,
+        name: skill.name,
+        description: skill.description,
+        version: skill.version || '1.0.0',
+        markdown,
+        priceIntent: priceIntent === 'paid' || priceIntent === 'free' ? priceIntent : 'free',
+      };
+      if (toolsYaml) body.toolsYaml = toolsYaml;
+      if (priceIntent === 'paid' && typeof intendedPriceCents === 'number' && intendedPriceCents >= 0) {
+        body.intendedPriceCents = intendedPriceCents;
+      }
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const apiKey = (process.env.STORE_PUBLISH_API_KEY || '').trim();
+      if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+      const resp = await fetch(submitUrl, { method: 'POST', headers, body: JSON.stringify(body) });
+      const data = (await resp.json().catch(() => ({}))) as { ok?: boolean; id?: string; error?: string; githubUrl?: string };
+      if (!resp.ok) {
+        const status = resp.status === 503 ? 503 : 400;
+        res.status(status).json({ error: data.error || `Store returned ${resp.status}`, githubUrl: data.githubUrl });
+        return;
+      }
+      if (data.ok && data.id) {
+        res.json({ published: true, slug, id: data.id, message: 'Submitted to the store. An admin will review it.' });
+      } else {
+        res.json({ published: true, slug, message: 'Submitted to the store.' });
+      }
+    } catch (e) {
+      log('gateway', 'error', (e as Error).message);
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
+  /** Publish status: list of user's submissions (pending/approved) from the store. Uses STORE_PUBLISH_API_KEY. */
+  app.get('/api/agent/skills/publish-status', async (_req: Request, res: Response) => {
+    try {
+      const storeBase = getStorePublishBaseUrl();
+      const apiKey = (process.env.STORE_PUBLISH_API_KEY || '').trim();
+      if (!storeBase || !apiKey) {
+        res.json({ submissions: [] });
+        return;
+      }
+      const url = `${storeBase.replace(/\/$/, '')}/api/me/submissions`;
+      const resp = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+      const data = (await resp.json().catch(() => ({}))) as { submissions?: Array<{ slug: string; status: string }>; error?: string };
+      if (!resp.ok) {
+        res.json({ submissions: [] });
+        return;
+      }
+      res.json({ submissions: data.submissions ?? [] });
+    } catch {
+      res.json({ submissions: [] });
     }
   });
 
@@ -1249,14 +1367,8 @@ export function createGateway(appMount: Express | null = null): Express {
       }
     }
     const timeoutMs = typeof timeout_ms === 'number' ? timeout_ms : config.agentTimeoutMs || 0;
-    const usePi = config.agentUsePi || use_pi === true || use_pi === '1';
-    if (usePi && !isPiAvailable()) {
-      res.status(503).json({
-        error:
-          'Pi runner requested but not available. Install optional deps: npm install @mariozechner/pi-agent-core @mariozechner/pi-ai @mariozechner/pi-coding-agent',
-      });
-      return;
-    }
+    let usePi = config.agentUsePi || use_pi === true || use_pi === '1';
+    if (usePi && !isPiAvailable()) usePi = false;
     try {
       const result = await withSessionLock(id, () =>
         usePi
@@ -1807,7 +1919,6 @@ export function attachWebSocket(
 }
 
 export function startGateway(): { app: Express; server: ReturnType<typeof createServer> } {
-  initDb(config.dbPath);
   const app = createGateway();
   const server = createServer(app);
   const { broadcast } = attachWebSocket(server, (ws) => {
@@ -1828,5 +1939,11 @@ export function startGateway(): { app: Express; server: ReturnType<typeof create
 }
 
 if (process.argv[1]?.includes('server')) {
-  startGateway();
+  (async () => {
+    await initDb(config.dbPath);
+    startGateway();
+  })().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
 }

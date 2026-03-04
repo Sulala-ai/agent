@@ -20,7 +20,7 @@ export type Skill = {
   bins?: string[];
   /** Required env vars from metadata sulala.requires.env (e.g. BSKY_HANDLE, BSKY_APP_PASSWORD). */
   env?: string[];
-  source?: 'user' | 'workspace' | 'managed' | 'bundled' | 'plugin' | 'extra';
+  source?: 'user' | 'installed' | 'workspace' | 'managed' | 'bundled' | 'plugin' | 'extra';
 };
 
 function parseFrontmatter(
@@ -165,13 +165,15 @@ export function getAllRequiredBins(config: Config): string[] {
   return [...bins];
 }
 
-/** Paths in precedence order: user (workspace skills) > workspace (agentContextPath) > managed > bundled > extra. */
-export function getSkillPaths(config: Config): { path: string; source: Skill['source']; isWorkspaceDir?: boolean }[] {
-  const out: { path: string; source: Skill['source']; isWorkspaceDir?: boolean }[] = [];
+/** Paths in precedence order: user (my/) > installed (workspace root) > workspace (agentContextPath) > managed > bundled > extra. */
+export function getSkillPaths(config: Config): { path: string; source: Skill['source']; isWorkspaceDir?: boolean; excludeSubdir?: string }[] {
+  const out: { path: string; source: Skill['source']; isWorkspaceDir?: boolean; excludeSubdir?: string }[] = [];
   const cwd = process.cwd();
 
-  // User skills: ~/.sulala/workspace/skills/<skill-name>/SKILL.md — safe from project updates
-  out.push({ path: config.skillsWorkspaceDir, source: 'user', isWorkspaceDir: true });
+  // User-created skills: ~/.sulala/workspace/skills/my/<slug>/ — created by you or the AI
+  out.push({ path: config.skillsWorkspaceMyDir, source: 'user', isWorkspaceDir: true });
+  // Hub-installed skills: ~/.sulala/workspace/skills/<slug>/ — exclude "my" so we don't list it as a skill
+  out.push({ path: config.skillsWorkspaceDir, source: 'installed', isWorkspaceDir: true, excludeSubdir: 'my' });
   if (config.agentContextPath?.trim()) {
     out.push({
       path: resolve(cwd, config.agentContextPath.trim()),
@@ -189,10 +191,11 @@ export function getSkillPaths(config: Config): { path: string; source: Skill['so
   return out;
 }
 
-/** Scan workspace skills dir: <base>/<skill-name>/SKILL.md (directory-per-skill). */
+/** Scan workspace skills dir: <base>/<skill-name>/README.md or SKILL.md (directory-per-skill). */
 function scanWorkspaceDirForSkills(
   base: string,
-  source: Skill['source']
+  source: Skill['source'],
+  excludeSubdir?: string
 ): Array<Skill & { name: string }> {
   if (!existsSync(base)) return [];
   const skills: Array<Skill & { name: string }> = [];
@@ -200,17 +203,21 @@ function scanWorkspaceDirForSkills(
     const stat = statSync(base);
     if (!stat.isDirectory()) return [];
     const subdirs = readdirSync(base, { withFileTypes: true })
-      .filter((d) => d.isDirectory() && !d.name.startsWith('.'))
+      .filter((d) => d.isDirectory() && !d.name.startsWith('.') && d.name !== excludeSubdir)
       .map((d) => d.name)
       .sort();
     for (const subdir of subdirs) {
+      const readmePath = join(base, subdir, 'README.md');
       const skillPath = join(base, subdir, 'SKILL.md');
-      if (!existsSync(skillPath)) continue;
-      const fullPath = skillPath;
+      const fullPath = existsSync(readmePath) ? readmePath : existsSync(skillPath) ? skillPath : null;
+      if (!fullPath) continue;
       try {
         const raw = readFileSync(fullPath, 'utf8');
         const { name, description, metadata } = parseFrontmatter(raw);
-        if (!name || !description) continue;
+        const slug = subdir;
+        // Use slug as name and placeholder description when frontmatter is missing so the skill still appears in the UI
+        const displayName = (name?.trim()) || slug.replace(/-/g, ' ');
+        const displayDescription = (description?.trim()) || `User-created skill. Add \`name:\` and \`description:\` to the YAML frontmatter in README.md.`;
 
         const bins = extractRequiredBins(metadata);
         const env = extractRequiredEnv(metadata);
@@ -222,10 +229,9 @@ function scanWorkspaceDirForSkills(
         const status: SkillStatus =
           bins.length === 0 ? 'unknown' : missing.length === 0 ? 'eligible' : 'blocked';
 
-        const slug = subdir;
         skills.push({
-          name,
-          description,
+          name: displayName,
+          description: displayDescription,
           filePath: fullPath,
           slug,
           status,
@@ -247,25 +253,48 @@ function scanWorkspaceDirForSkills(
   return skills;
 }
 
+/** Collect .md files from a base path: top-level *.md and subdirs with README.md (same as loop's collectFiles). */
+function collectSkillFiles(base: string): { path: string; name: string }[] {
+  const files: { path: string; name: string }[] = [];
+  if (!existsSync(base)) return files;
+  try {
+    const stat = statSync(base);
+    if (stat.isFile() && (base.endsWith('.md') || base.endsWith('.txt'))) {
+      files.push({ path: base, name: base.split(/[/\\]/).pop() || '' });
+      return files;
+    }
+    if (!stat.isDirectory()) return files;
+    const entries = readdirSync(base, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+    const subdirSlugs = new Set<string>();
+    for (const e of entries) {
+      if (e.isDirectory() && !e.name.startsWith('.')) {
+        const readmePath = join(base, e.name, 'README.md');
+        if (existsSync(readmePath)) {
+          subdirSlugs.add(e.name);
+          files.push({ path: readmePath, name: `${e.name}.md` });
+        }
+      }
+    }
+    for (const e of entries) {
+      if (e.isFile() && (e.name.endsWith('.md') || e.name.endsWith('.txt'))) {
+        const slug = e.name.replace(/\.(md|txt)$/, '');
+        if (e.name.endsWith('.md') && subdirSlugs.has(slug)) continue;
+        files.push({ path: join(base, e.name), name: e.name });
+      }
+    }
+  } catch {
+    // skip
+  }
+  return files;
+}
+
 function scanDirForSkills(
   base: string,
   source: Skill['source']
 ): Array<Skill & { name: string }> {
-  if (!existsSync(base)) return [];
   const skills: Array<Skill & { name: string }> = [];
   try {
-    const stat = statSync(base);
-    const files: { path: string; name: string }[] = [];
-    if (stat.isFile() && (base.endsWith('.md') || base.endsWith('.txt'))) {
-      files.push({ path: base, name: base.split(/[/\\]/).pop() || '' });
-    } else if (stat.isDirectory()) {
-      const names = readdirSync(base).sort();
-      for (const n of names) {
-        if (!n.endsWith('.md') && !n.endsWith('.txt')) continue;
-        files.push({ path: join(base, n), name: n });
-      }
-    }
-
+    const files = collectSkillFiles(base);
     for (const { path: fullPath, name: fileName } of files) {
       if (!fileName.endsWith('.md')) continue;
       try {
@@ -308,12 +337,12 @@ function scanDirForSkills(
   return skills;
 }
 
-/** List skills from all paths with precedence: user > workspace > managed > bundled > extra. Deduped by slug. By default filtered by skills.entries.<slug>.enabled; set includeDisabled true to return all (e.g. for dashboard). */
+/** List skills from all paths with precedence: user > installed > workspace > managed > bundled > extra. Deduped by slug. By default filtered by skills.entries.<slug>.enabled; set includeDisabled true to return all (e.g. for dashboard). */
 export function listSkills(config: Config, options?: { includeDisabled?: boolean }): Skill[] {
   const paths = getSkillPaths(config);
   const bySlug = new Map<string, Skill>();
-  for (const { path: p, source, isWorkspaceDir } of paths) {
-    const scanned = isWorkspaceDir ? scanWorkspaceDirForSkills(p, source) : scanDirForSkills(p, source);
+  for (const { path: p, source, isWorkspaceDir, excludeSubdir } of paths) {
+    const scanned = isWorkspaceDir ? scanWorkspaceDirForSkills(p, source, excludeSubdir) : scanDirForSkills(p, source);
     for (const s of scanned) {
       const slug = s.slug ?? s.filePath.split(/[/\\]/).pop()?.replace(/\.md$/, '') ?? s.name;
       if (!bySlug.has(slug)) {

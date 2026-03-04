@@ -68,10 +68,12 @@ Use when the user asks for X, Y, or Z.
 - Do not run destructive commands without explicit confirmation.
 ```
 
-## Adding to the registry
+## Adding to the hub (store)
 
-1. Add `registry/<slug>.md` with the full skill content.
-2. Add an entry to `registry/skills-registry.json`:
+The agent does not ship a local registry. To publish skills so users can install from the hub:
+
+1. In the **store** repo, add `store/data/skills/<slug>.md` with the full skill content.
+2. Add an entry to `store/data/registry.json`:
 
 ```json
 {
@@ -80,15 +82,13 @@ Use when the user asks for X, Y, or Z.
       "slug": "my-skill",
       "name": "my-skill",
       "description": "One-line description.",
-      "version": "1.0.0",
-      "url": "https://..."
+      "version": "1.0.0"
     }
   ]
 }
 ```
 
-- **slug** — File name (without `.md`); used for install/update.
-- **url** — Optional; if set, content is fetched from this URL instead of local file.
+- **slug** — File name (without `.md`); used for install/update. The hub serves content from `store/data/skills/<slug>.md` and injects the `url` in the registry response.
 
 ## Validation
 
@@ -102,11 +102,11 @@ Run `npm test` to validate skills. The `validateSkillContent` function checks:
 
 Skills load from (highest to lowest):
 
-1. **User** (`~/.sulala/workspace/skills/<name>/SKILL.md`) — directory-per-skill; safe from project updates
+1. **User** (`~/.sulala/workspace/skills/<name>/README.md` or `SKILL.md`) — directory-per-skill; safe from project updates
 2. Workspace (`AGENT_CONTEXT_PATH`)
 3. Managed (`~/.sulala/skills`) — flat `.md` files
 4. Bundled (`context/`)
 5. Plugin (`plugins/*/skills`)
 6. Extra (`SKILLS_EXTRA_DIRS`)
 
-On name conflict, the higher source wins. To create a skill that won't be overwritten on project updates, use `~/.sulala/workspace/skills/<slug>/SKILL.md`. Refresh skills or restart the gateway to pick it up.
+On name conflict, the higher source wins. To create a skill that won't be overwritten on project updates, use `~/.sulala/workspace/skills/my/<slug>/README.md`. Refresh skills or restart the gateway to pick it up.

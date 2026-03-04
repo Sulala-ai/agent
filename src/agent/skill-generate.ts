@@ -126,15 +126,23 @@ This skill is set to run: **${WIZARD_TRIGGERS.find((t) => t.id === triggerId)?.l
   };
 }
 
+/** Empty tools.yaml template: user can add tool definitions here. Loader expects `tools:` array. */
+const EMPTY_TOOLS_YAML = `# Optional: add tool definitions for this skill.
+# Schema: tools[].name, description, profile, auth, request (method, url, queryParams, bodyType, bodyKeys), parameters, response.
+# See docs/tool-spec-format.md or context/<name>/tools.yaml examples.
+tools: []
+`;
+
 /**
- * Write SKILL.md to workspace and add config entry. Uses config.skillsWorkspaceDir.
+ * Write README.md and empty tools.yaml to "created by me" dir and add config entry. Uses config.skillsWorkspaceMyDir.
  */
 export function writeGeneratedSkill(config: Config, spec: SkillSpec): { path: string; slug: string } {
-  const dir = join(config.skillsWorkspaceDir, spec.slug);
+  const dir = join(config.skillsWorkspaceMyDir, spec.slug);
   mkdirSync(dir, { recursive: true });
-  const filePath = join(dir, 'SKILL.md');
+  const filePath = join(dir, 'README.md');
   const content = spec.frontmatter + spec.body;
   writeFileSync(filePath, content, 'utf8');
+  writeFileSync(join(dir, 'tools.yaml'), EMPTY_TOOLS_YAML, 'utf8');
 
   const cfg = loadSkillsConfig();
   if (!cfg.entries) cfg.entries = {};

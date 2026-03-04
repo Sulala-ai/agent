@@ -1,42 +1,22 @@
 # SulalaHub
 
-SulalaHub is a built-in skills registry served by the Sulala gateway. It lets you share skills from a running instance without needing an external registry server.
+The agent does not ship a local registry. Use a hub (e.g. the [SulalaHub store](https://github.com/schedra/sulala)) and set **`SKILLS_REGISTRY_URL`** to list and install skills.
 
 ## How it works
 
-When the gateway runs, it exposes:
-
-- **`GET /api/sulalahub/registry`** — Returns the skills index with `url` pointing to each skill’s content.
-- **`GET /api/sulalahub/skills/:slug`** — Returns the raw `.md` content for a skill (from `registry/<slug>.md`).
-
-To use SulalaHub as the registry for another instance:
+1. Set `SKILLS_REGISTRY_URL` in your agent `.env` to your hub’s registry endpoint:
 
 ```bash
-SKILLS_REGISTRY_URL=http://localhost:2026/api/sulalahub/registry
+SKILLS_REGISTRY_URL=https://hub.sulala.ai/api/sulalahub/registry
 ```
 
-Then `sulala skill install <slug>` will fetch the registry from that URL and the skill content from the `url` field (e.g. `http://localhost:2026/api/sulalahub/skills/apple-notes`).
+2. Then `sulala skill install <slug>` (or the dashboard) fetches the skill list from that URL and each skill’s content from the `url` field in the registry (e.g. `https://hub.sulala.ai/api/sulalahub/skills/apple-notes`).
 
-## Setup
+## Gateway endpoints (optional)
 
-1. Run the Sulala gateway.
-2. Add skills to `registry/skills-registry.json` and `registry/<slug>.md` (see [skills-authoring.md](./skills-authoring.md)).
-3. Set `SULALAHUB_BASE_URL` in `.env` if the gateway is behind a proxy or uses a different host/port:
+The agent gateway still exposes SulalaHub-style endpoints for instances that serve registry data (e.g. a separate hub app). Without a local registry, they return an empty list:
 
-```bash
-SULALAHUB_BASE_URL=https://your-sulalahub.example.com
-```
+- **`GET /api/sulalahub/registry`** — Returns the skills index with `url` for each skill.
+- **`GET /api/sulalahub/skills/:slug`** — Returns the raw `.md` content for a skill.
 
-If omitted, the base URL defaults to `http://<HOST>:<PORT>`.
-
-## Publishing skills
-
-1. Add an entry to `registry/skills-registry.json`:
-
-```json
-{ "slug": "my-skill", "name": "My Skill", "description": "Does X. Use when...", "version": "1.0.0" }
-```
-
-2. Create `registry/my-skill.md` with the skill content (SKILL.md format).
-
-3. Restart or reload the gateway. The skill will be available at `/api/sulalahub/skills/my-skill`.
+To publish and serve skills, use the **store** app: add skills to `store/data/registry.json` and `store/data/skills/<slug>.md`, then deploy the store and point `SKILLS_REGISTRY_URL` at it. See the store README for sync and deployment.

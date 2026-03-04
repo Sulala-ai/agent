@@ -1,35 +1,127 @@
-import Database from 'better-sqlite3';
-import { readFileSync, mkdirSync, existsSync } from 'fs';
+import initSqlJs from 'sql.js';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import type { InsertTaskPayload, AgentSessionRow, AgentMessageRow } from '../types.js';
+import type { SqlJsDatabase } from 'sql.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-let db: Database.Database | null = null;
+/** Wrapper that matches better-sqlite3-style API for drop-in replacement. */
+export interface SqliteDb {
+  prepare(sql: string): {
+    run(...params: unknown[]): { changes: number };
+    get(...params: unknown[]): Record<string, unknown> | undefined;
+    all(...params: unknown[]): Record<string, unknown>[];
+  };
+  exec(sql: string): void;
+  close(): void;
+}
 
-export function initDb(path = './data/sulala.db'): Database.Database {
+let db: SqliteDb | null = null;
+let dbPath: string = './data/sulala.db';
+let persistTimer: ReturnType<typeof setImmediate> | null = null;
+
+function createWrapper(nativeDb: SqlJsDatabase): SqliteDb {
+  function schedulePersist(): void {
+    if (persistTimer) return;
+    persistTimer = setImmediate(() => {
+      persistTimer = null;
+      try {
+        const data = nativeDb.export();
+        writeFileSync(dbPath, Buffer.from(data));
+      } catch {
+        // ignore write errors (e.g. read-only)
+      }
+    });
+  }
+
+  return {
+    prepare(sql: string) {
+      const stmt = nativeDb.prepare(sql);
+      const bind = (params: unknown[]) => {
+        if (params.length) stmt.bind(params as number[]);
+      };
+      return {
+        run(...params: unknown[]) {
+          bind(params);
+          stmt.step();
+          stmt.free();
+          const changeResult = nativeDb.exec('SELECT changes() as c');
+          const changes = changeResult.length && changeResult[0].values[0]?.[0] != null
+            ? Number(changeResult[0].values[0][0])
+            : 0;
+          schedulePersist();
+          return { changes };
+        },
+        get(...params: unknown[]) {
+          bind(params);
+          const hasRow = stmt.step();
+          const row = hasRow ? (stmt.getAsObject() as Record<string, unknown>) : undefined;
+          stmt.free();
+          return row;
+        },
+        all(...params: unknown[]) {
+          bind(params);
+          const rows: Record<string, unknown>[] = [];
+          while (stmt.step()) {
+            rows.push(stmt.getAsObject() as Record<string, unknown>);
+          }
+          stmt.free();
+          return rows;
+        },
+      };
+    },
+    exec(sql: string) {
+      nativeDb.exec(sql);
+      schedulePersist();
+    },
+    close() {
+      try {
+        const data = nativeDb.export();
+        writeFileSync(dbPath, Buffer.from(data));
+      } catch {
+        // ignore
+      }
+      nativeDb.close();
+    },
+  };
+}
+
+export async function initDb(path = './data/sulala.db'): Promise<SqliteDb> {
   if (db) return db;
+  dbPath = path;
   const dir = dirname(path);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  db = new Database(path);
+
+  const SQL = await initSqlJs();
+  let nativeDb: SqlJsDatabase;
+  if (existsSync(path)) {
+    const buf = readFileSync(path);
+    nativeDb = new SQL.Database(buf);
+  } else {
+    nativeDb = new SQL.Database();
+  }
+
   const schema = readFileSync(join(__dirname, 'schema.sql'), 'utf8');
-  db.exec(schema);
+  nativeDb.exec(schema);
+
   // Migration: add usage and cost_usd columns to agent_messages if missing
   try {
-    const info = db.prepare("PRAGMA table_info(agent_messages)").all() as { name: string }[];
-    if (!info.some((c) => c.name === 'usage')) {
-      db.exec('ALTER TABLE agent_messages ADD COLUMN usage TEXT');
+    const info = nativeDb.exec("PRAGMA table_info(agent_messages)");
+    const names = (info[0]?.values?.map((r: unknown[]) => r[1] as string) ?? []) as string[];
+    if (!names.some((c) => c === 'usage')) {
+      nativeDb.run('ALTER TABLE agent_messages ADD COLUMN usage TEXT');
     }
-    if (!info.some((c) => c.name === 'cost_usd')) {
-      db.exec('ALTER TABLE agent_messages ADD COLUMN cost_usd REAL');
+    if (!names.some((c) => c === 'cost_usd')) {
+      nativeDb.run('ALTER TABLE agent_messages ADD COLUMN cost_usd REAL');
     }
   } catch {
     // ignore
   }
   // Migration: agent_memory table
   try {
-    db.exec(`
+    nativeDb.exec(`
       CREATE TABLE IF NOT EXISTS agent_memory (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         scope TEXT NOT NULL,
@@ -44,7 +136,7 @@ export function initDb(path = './data/sulala.db'): Database.Database {
   }
   // Migration: scheduled_jobs table and columns
   try {
-    db.exec(`
+    nativeDb.exec(`
       CREATE TABLE IF NOT EXISTS scheduled_jobs (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL DEFAULT '',
@@ -60,21 +152,24 @@ export function initDb(path = './data/sulala.db'): Database.Database {
       );
       CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_enabled ON scheduled_jobs(enabled);
     `);
-    const jobCols = db.prepare("PRAGMA table_info(scheduled_jobs)").all() as { name: string }[];
-    if (!jobCols.some((c) => c.name === 'name')) db.exec('ALTER TABLE scheduled_jobs ADD COLUMN name TEXT NOT NULL DEFAULT \'\'');
-    if (!jobCols.some((c) => c.name === 'description')) db.exec('ALTER TABLE scheduled_jobs ADD COLUMN description TEXT NOT NULL DEFAULT \'\'');
-    if (!jobCols.some((c) => c.name === 'prompt')) db.exec('ALTER TABLE scheduled_jobs ADD COLUMN prompt TEXT');
-    if (!jobCols.some((c) => c.name === 'delivery')) db.exec('ALTER TABLE scheduled_jobs ADD COLUMN delivery TEXT');
-    if (!jobCols.some((c) => c.name === 'provider')) db.exec('ALTER TABLE scheduled_jobs ADD COLUMN provider TEXT');
-    if (!jobCols.some((c) => c.name === 'model')) db.exec('ALTER TABLE scheduled_jobs ADD COLUMN model TEXT');
+    const jobInfo = nativeDb.exec("PRAGMA table_info(scheduled_jobs)");
+    const jobCols = (jobInfo[0]?.values?.map((r: unknown[]) => r[1] as string) ?? []) as string[];
+    if (!jobCols.some((c) => c === 'name')) nativeDb.run("ALTER TABLE scheduled_jobs ADD COLUMN name TEXT NOT NULL DEFAULT ''");
+    if (!jobCols.some((c) => c === 'description')) nativeDb.run("ALTER TABLE scheduled_jobs ADD COLUMN description TEXT NOT NULL DEFAULT ''");
+    if (!jobCols.some((c) => c === 'prompt')) nativeDb.run('ALTER TABLE scheduled_jobs ADD COLUMN prompt TEXT');
+    if (!jobCols.some((c) => c === 'delivery')) nativeDb.run('ALTER TABLE scheduled_jobs ADD COLUMN delivery TEXT');
+    if (!jobCols.some((c) => c === 'provider')) nativeDb.run('ALTER TABLE scheduled_jobs ADD COLUMN provider TEXT');
+    if (!jobCols.some((c) => c === 'model')) nativeDb.run('ALTER TABLE scheduled_jobs ADD COLUMN model TEXT');
   } catch {
     // ignore
   }
+
+  db = createWrapper(nativeDb);
   return db;
 }
 
-export function getDb(): Database.Database {
-  if (!db) throw new Error('DB not initialized; call initDb first');
+export function getDb(): SqliteDb {
+  if (!db) throw new Error('DB not initialized; call await initDb() first');
   return db;
 }
 
@@ -210,7 +305,7 @@ export interface FileStateRow {
 
 export function getFileStates(limit = 200): FileStateRow[] {
   const d = getDb();
-  return d.prepare('SELECT * FROM file_states ORDER BY last_seen DESC LIMIT ?').all(limit) as FileStateRow[];
+  return d.prepare('SELECT * FROM file_states ORDER BY last_seen DESC LIMIT ?').all(limit) as unknown as FileStateRow[];
 }
 
 // --- Agent sessions ---
@@ -227,19 +322,19 @@ export function createAgentSession(sessionKey: string, meta: Record<string, unkn
 
 export function getAgentSessionById(id: string): AgentSessionRow | null {
   const d = getDb();
-  const row = d.prepare('SELECT * FROM agent_sessions WHERE id = ?').get(id) as AgentSessionRow | undefined;
+  const row = d.prepare('SELECT * FROM agent_sessions WHERE id = ?').get(id) as unknown as AgentSessionRow | undefined;
   return row ?? null;
 }
 
 export function getAgentSessionByKey(sessionKey: string): AgentSessionRow | null {
   const d = getDb();
-  const row = d.prepare('SELECT * FROM agent_sessions WHERE session_key = ?').get(sessionKey) as AgentSessionRow | undefined;
+  const row = d.prepare('SELECT * FROM agent_sessions WHERE session_key = ?').get(sessionKey) as unknown as AgentSessionRow | undefined;
   return row ?? null;
 }
 
 export function listAgentSessions(limit = 50): AgentSessionRow[] {
   const d = getDb();
-  return d.prepare('SELECT * FROM agent_sessions ORDER BY updated_at DESC LIMIT ?').all(limit) as AgentSessionRow[];
+  return d.prepare('SELECT * FROM agent_sessions ORDER BY updated_at DESC LIMIT ?').all(limit) as unknown as AgentSessionRow[];
 }
 
 export function getOrCreateAgentSession(sessionKey: string, meta?: Record<string, unknown> | null): AgentSessionRow {
@@ -281,7 +376,7 @@ export function appendAgentMessage(msg: {
     costUsd
   );
   const row = d.prepare('SELECT * FROM agent_messages WHERE session_id = ? ORDER BY id DESC LIMIT 1')
-    .get(msg.session_id) as AgentMessageRow & { id: number };
+    .get(msg.session_id) as unknown as AgentMessageRow & { id: number };
   return { ...row, created_at: row.created_at };
 }
 
@@ -289,10 +384,9 @@ export function getAgentMessages(sessionId: string, limit = 100): AgentMessageRo
   const d = getDb();
   return d.prepare(
     'SELECT * FROM agent_messages WHERE session_id = ? ORDER BY id ASC LIMIT ?'
-  ).all(sessionId, limit) as (AgentMessageRow & { id: number })[];
+  ).all(sessionId, limit) as unknown as (AgentMessageRow & { id: number })[];
 }
 
-/** Update content of the tool message for this tool_call_id (used when replacing pending-approval placeholder with real result). */
 export function updateAgentMessageToolResult(
   sessionId: string,
   toolCallId: string,
@@ -302,7 +396,7 @@ export function updateAgentMessageToolResult(
   const result = d.prepare(
     'UPDATE agent_messages SET content = ? WHERE session_id = ? AND role = ? AND tool_call_id = ?'
   ).run(content, sessionId, 'tool', toolCallId);
-  return (result as { changes: number }).changes > 0;
+  return result.changes > 0;
 }
 
 // --- Agent memory (session + shared) ---
@@ -321,7 +415,7 @@ export function appendAgentMemory(scope: 'session' | 'shared', scopeKey: string,
   d.prepare(
     'INSERT INTO agent_memory (scope, scope_key, content, created_at) VALUES (?, ?, ?, ?)'
   ).run(scope, scopeKey, content.trim(), now);
-  const row = d.prepare('SELECT * FROM agent_memory WHERE id = last_insert_rowid()').get() as AgentMemoryRow;
+  const row = d.prepare('SELECT * FROM agent_memory WHERE id = last_insert_rowid()').get() as unknown as AgentMemoryRow;
   return row;
 }
 
@@ -333,10 +427,9 @@ export function listAgentMemories(
   const d = getDb();
   return d.prepare(
     'SELECT * FROM agent_memory WHERE scope = ? AND scope_key = ? ORDER BY id DESC LIMIT ?'
-  ).all(scope, scopeKey, limit) as AgentMemoryRow[];
+  ).all(scope, scopeKey, limit) as unknown as AgentMemoryRow[];
 }
 
-/** Returns a single string suitable for injection into the system prompt (bullets or markdown). */
 export function getAgentMemoryForContext(
   scope: 'session' | 'shared',
   scopeKey: string,
@@ -357,7 +450,6 @@ export function getAgentMemoryForContext(
   return lines.join('\n');
 }
 
-/** Distinct scope_key values per scope (for UI: list which sessions/keys have memory). */
 export function listAgentMemoryScopeKeys(): { session: string[]; shared: string[] } {
   const d = getDb();
   const session = d.prepare(
@@ -393,14 +485,14 @@ export interface ScheduledJobRow {
 export function listScheduledJobs(enabledOnly = false): ScheduledJobRow[] {
   const d = getDb();
   if (enabledOnly) {
-    return d.prepare('SELECT * FROM scheduled_jobs WHERE enabled = 1 ORDER BY created_at ASC').all() as ScheduledJobRow[];
+    return d.prepare('SELECT * FROM scheduled_jobs WHERE enabled = 1 ORDER BY created_at ASC').all() as unknown as ScheduledJobRow[];
   }
-  return d.prepare('SELECT * FROM scheduled_jobs ORDER BY created_at ASC').all() as ScheduledJobRow[];
+  return d.prepare('SELECT * FROM scheduled_jobs ORDER BY created_at ASC').all() as unknown as ScheduledJobRow[];
 }
 
 export function getScheduledJob(id: string): ScheduledJobRow | null {
   const d = getDb();
-  const row = d.prepare('SELECT * FROM scheduled_jobs WHERE id = ?').get(id) as ScheduledJobRow | undefined;
+  const row = d.prepare('SELECT * FROM scheduled_jobs WHERE id = ?').get(id) as unknown as ScheduledJobRow | undefined;
   return row ?? null;
 }
 
@@ -480,7 +572,6 @@ export function deleteScheduledJob(id: string): void {
   d.prepare('DELETE FROM scheduled_jobs WHERE id = ?').run(id);
 }
 
-/** Get recent task runs for a scheduled job (agent_job tasks with matching jobId in payload). */
 export function getTasksForJob(jobId: string, limit = 50): Array<{
   id: string;
   type: string;

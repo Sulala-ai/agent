@@ -1,0 +1,2 @@
+# No native build dependencies (sql.js is WASM-only)
+ignoredBuiltDependencies: []

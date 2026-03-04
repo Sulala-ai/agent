@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowLeft, Copy, Eye, EyeOff, LayoutTemplate, Lock, Plus, Puzzle } from "lucide-react";
+import { ArrowLeft, Copy, Eye, EyeOff, LayoutTemplate, Lock, MoreVertical, Plus, Puzzle, Share2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,6 +21,14 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { useSkills } from "../hooks/useSkills";
 import { SkillWizardFlow } from "@/features/skill-wizard";
@@ -37,6 +45,7 @@ const TEMPLATE_FIELD_LABELS: Record<string, string> = {
 export function SkillsPage(state: SkillsState) {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [templateToUse, setTemplateToUse] = useState<AgentSkillTemplate | null>(null);
+  const [publishDialog, setPublishDialog] = useState<{ slug: string; name: string } | null>(null);
   const {
     skills,
     skillsLoading,
@@ -44,7 +53,10 @@ export function SkillsPage(state: SkillsState) {
     setSkillsSearch,
     registrySkills,
     registryLoading,
+    systemRegistrySkills,
+    systemRegistryLoading,
     installingSlug,
+    publishingSlug,
     selectedHubSkill,
     setSelectedHubSkill,
     skillsUpdating,
@@ -60,12 +72,15 @@ export function SkillsPage(state: SkillsState) {
     handleSkillEntryUpdate,
     handleSkillEntrySave,
     handleInstallSkill,
+    handleUninstallSkill,
+    handlePublishSkill,
     handleUseTemplate,
     handleUpdateSkills,
     refreshRegistry,
     validateSkillEnvConfig,
     templates,
     templatesLoading,
+    publishStatusMap,
   } = state;
 
   return (
@@ -87,14 +102,16 @@ export function SkillsPage(state: SkillsState) {
               value={skillsSearch}
               onChange={(e) => setSkillsSearch(e.target.value)}
             />
-            {skillsTab === "installed" ? (
+            {skillsTab === "installed" || skillsTab === "myskills" ? (
               <>
                 <Button variant="outline" size="sm" onClick={loadSkills} disabled={skillsLoading}>
                   {skillsLoading ? "…" : "Refresh"}
                 </Button>
-                <Button variant="secondary" size="sm" onClick={handleUpdateSkills} disabled={skillsUpdating}>
-                  {skillsUpdating ? "…" : "Update all"}
-                </Button>
+                {skillsTab === "installed" && (
+                  <Button variant="secondary" size="sm" onClick={handleUpdateSkills} disabled={skillsUpdating}>
+                    {skillsUpdating ? "…" : "Update all"}
+                  </Button>
+                )}
               </>
             ) : skillsTab === "templates" ? (
               <Button variant="outline" size="sm" onClick={loadSkills} disabled={templatesLoading}>
@@ -108,9 +125,10 @@ export function SkillsPage(state: SkillsState) {
           </div>
         </CardHeader>
         <CardContent>
-          <Tabs value={skillsTab} onValueChange={(v) => setSkillsTab(v as "installed" | "hub" | "templates")}>
+          <Tabs value={skillsTab} onValueChange={(v) => setSkillsTab(v as "installed" | "myskills" | "hub" | "templates")}>
             <TabsList className="mb-4">
               <TabsTrigger value="installed">Installed</TabsTrigger>
+              <TabsTrigger value="myskills">My skills</TabsTrigger>
               <TabsTrigger value="templates">Templates</TabsTrigger>
               <TabsTrigger value="hub">From Hub</TabsTrigger>
             </TabsList>
@@ -126,7 +144,35 @@ export function SkillsPage(state: SkillsState) {
                 handleSkillConfigToggle={handleSkillConfigToggle}
                 handleSkillEntryUpdate={handleSkillEntryUpdate}
                 handleSkillEntrySave={handleSkillEntrySave}
+                handleUninstallSkill={handleUninstallSkill}
+                onPublishOpen={(slug, name) => setPublishDialog({ slug, name })}
                 validateSkillEnvConfig={validateSkillEnvConfig}
+                publishStatusMap={publishStatusMap}
+              />
+            </TabsContent>
+            <TabsContent value="myskills" className="mt-0">
+              <InstalledTab
+                skills={skills.filter((s) => s.source === "user")}
+                skillsLoading={skillsLoading}
+                skillsSearch={skillsSearch}
+                skillsConfig={skillsConfig}
+                skillsUpdates={skillsUpdates}
+                visibleSecretKeys={visibleSecretKeys}
+                setVisibleSecretKeys={setVisibleSecretKeys}
+                handleSkillConfigToggle={handleSkillConfigToggle}
+                handleSkillEntryUpdate={handleSkillEntryUpdate}
+                handleSkillEntrySave={handleSkillEntrySave}
+                handleUninstallSkill={handleUninstallSkill}
+                onPublishOpen={(slug, name) => setPublishDialog({ slug, name })}
+                validateSkillEnvConfig={validateSkillEnvConfig}
+                publishStatusMap={publishStatusMap}
+                emptyMessage={
+                  <>
+                    Skills you or the AI created appear here. They’re stored in{" "}
+                    <code className="text-xs">~/.sulala/workspace/skills/my/&lt;name&gt;/README.md</code>. Create one via
+                    &quot;Create skill&quot; or ask the agent to create a skill for you.
+                  </>
+                }
               />
             </TabsContent>
             <TabsContent value="templates" className="mt-0">
@@ -143,6 +189,8 @@ export function SkillsPage(state: SkillsState) {
                 skills={skills}
                 registrySkills={registrySkills}
                 registryLoading={registryLoading}
+                systemRegistrySkills={systemRegistrySkills}
+                systemRegistryLoading={systemRegistryLoading}
                 skillsSearch={skillsSearch}
                 setSelectedHubSkill={setSelectedHubSkill}
               />
@@ -170,6 +218,14 @@ export function SkillsPage(state: SkillsState) {
         onClose={() => setTemplateToUse(null)}
         onSubmit={handleUseTemplate}
       />
+
+      <PublishToStoreDialog
+        slug={publishDialog?.slug}
+        name={publishDialog?.name}
+        onClose={() => setPublishDialog(null)}
+        onPublish={handlePublishSkill}
+        publishingSlug={publishingSlug}
+      />
     </>
   );
 }
@@ -185,7 +241,11 @@ function InstalledTab({
   handleSkillConfigToggle,
   handleSkillEntryUpdate,
   handleSkillEntrySave,
+  handleUninstallSkill,
+  onPublishOpen,
   validateSkillEnvConfig,
+  publishStatusMap,
+  emptyMessage,
 }: Pick<
   SkillsState,
   | "skills"
@@ -198,8 +258,10 @@ function InstalledTab({
   | "handleSkillConfigToggle"
   | "handleSkillEntryUpdate"
   | "handleSkillEntrySave"
+  | "handleUninstallSkill"
   | "validateSkillEnvConfig"
->) {
+  | "publishStatusMap"
+> & { onPublishOpen?: (slug: string, name: string) => void; emptyMessage?: React.ReactNode }) {
   const filtered = skills.filter(
     (s) =>
       !skillsSearch.trim() ||
@@ -213,7 +275,11 @@ function InstalledTab({
   if (filtered.length === 0) {
     return (
       <p className="text-muted-foreground text-sm">
-        No installed skills. Add skills to ~/.sulala/workspace/skills/&lt;name&gt;/SKILL.md, or install from the From Hub tab.
+        {emptyMessage ?? (
+          <>
+            No installed skills. Add skills to ~/.sulala/workspace/skills/&lt;name&gt;/README.md, or install from the From Hub tab.
+          </>
+        )}
       </p>
     );
   }
@@ -246,6 +312,11 @@ function InstalledTab({
             onToggle={() => handleSkillConfigToggle(row.slug, !enabled)}
             onEntryUpdate={(updates) => handleSkillEntryUpdate(row.slug, updates)}
             onEntrySave={(requiredEnv, legacy) => handleSkillEntrySave(row.slug, requiredEnv, legacy)}
+            canUninstall={s.source === "user" || s.source === "installed"}
+            onUninstall={() => handleUninstallSkill(row.slug, s.source)}
+            canPublish={s.source === "user" && !!onPublishOpen}
+            onPublish={onPublishOpen ? () => onPublishOpen(row.slug, row.name) : undefined}
+            publishStatus={publishStatusMap?.[row.slug]}
             validateSkillEnvConfig={validateSkillEnvConfig}
           />
         );
@@ -394,6 +465,126 @@ function UseTemplateDialog({
   );
 }
 
+function PublishToStoreDialog({
+  slug,
+  name,
+  onClose,
+  onPublish,
+  publishingSlug,
+}: {
+  slug: string | undefined;
+  name: string | undefined;
+  onClose: () => void;
+  onPublish: (slug: string, options: { priceIntent: "free" | "paid"; intendedPriceCents?: number }) => Promise<void>;
+  publishingSlug: string | null;
+}) {
+  const [priceIntent, setPriceIntent] = useState<"free" | "paid">("free");
+  const [priceDollars, setPriceDollars] = useState("");
+  const [success, setSuccess] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const open = !!slug;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!slug) return;
+    setError(null);
+    try {
+      const intendedPriceCents =
+        priceIntent === "paid" && priceDollars.trim() !== ""
+          ? Math.round(parseFloat(priceDollars) * 100)
+          : undefined;
+      await onPublish(slug, {
+        priceIntent,
+        intendedPriceCents: intendedPriceCents !== undefined && Number.isFinite(intendedPriceCents) ? intendedPriceCents : undefined,
+      });
+      setSuccess(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Publish failed. Set SKILLS_REGISTRY_URL in the agent .env to your store (e.g. http://localhost:3002).");
+    }
+  };
+
+  const handleClose = () => {
+    setSuccess(false);
+    setError(null);
+    setPriceIntent("free");
+    setPriceDollars("");
+    onClose();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && handleClose()}>
+      <DialogContent className="max-w-md" showCloseButton>
+        <DialogHeader>
+          <DialogTitle>Publish to store</DialogTitle>
+          <DialogDescription>
+            Submit &quot;{name ?? slug}&quot; to the skill store. Others can install it after an admin approves. Set <code className="text-xs">SKILLS_REGISTRY_URL</code> in the agent .env to your store URL (e.g. http://localhost:3002). No API key needed unless your store requires one.
+          </DialogDescription>
+        </DialogHeader>
+        {success ? (
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              Submitted to the store. An admin will review it. You can track it under My skills on the store.
+            </p>
+            <DialogFooter>
+              <Button onClick={handleClose}>Close</Button>
+            </DialogFooter>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-4 pt-2">
+            <div className="space-y-2">
+              <Label>Price</Label>
+              <div className="flex gap-4">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="priceIntent"
+                    checked={priceIntent === "free"}
+                    onChange={() => setPriceIntent("free")}
+                  />
+                  Free
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="priceIntent"
+                    checked={priceIntent === "paid"}
+                    onChange={() => setPriceIntent("paid")}
+                  />
+                  Paid
+                </label>
+              </div>
+            </div>
+            {priceIntent === "paid" && (
+              <div className="space-y-2">
+                <Label htmlFor="publish-price">Price (USD)</Label>
+                <Input
+                  id="publish-price"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  placeholder="4.99"
+                  value={priceDollars}
+                  onChange={(e) => setPriceDollars(e.target.value)}
+                />
+              </div>
+            )}
+            {error && <p className="text-sm text-destructive">{error}</p>}
+            <DialogFooter className="gap-2 pt-2">
+              <Button type="button" variant="outline" onClick={handleClose}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={!!publishingSlug}>
+                {publishingSlug === slug ? "Submitting…" : "Submit to store"}
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function SkillCard({
   slug,
   name,
@@ -413,6 +604,11 @@ function SkillCard({
   onToggle,
   onEntryUpdate,
   onEntrySave,
+  canUninstall,
+  onUninstall,
+  canPublish,
+  onPublish,
+  publishStatus,
   validateSkillEnvConfig,
 }: {
   slug: string;
@@ -433,17 +629,47 @@ function SkillCard({
   onToggle: () => void;
   onEntryUpdate: (updates: Record<string, unknown>) => void;
   onEntrySave: (requiredEnv?: string[], legacy?: Record<string, unknown>) => void;
+  canUninstall?: boolean;
+  onUninstall?: () => void;
+  canPublish?: boolean;
+  onPublish?: () => void;
+  publishStatus?: "pending" | "approved";
   validateSkillEnvConfig: (
     entry: Record<string, unknown>,
     envVars: string[],
     legacy?: Record<string, unknown>
   ) => { valid: boolean; errors: Record<string, string> };
 }) {
+  const [uninstallDialogOpen, setUninstallDialogOpen] = useState(false);
   return (
-    <article className="border-border/70 bg-card/30 flex flex-col gap-3 rounded-xl border p-4">
-      <span className="bg-primary/10 text-primary flex size-10 shrink-0 items-center justify-center rounded-lg">
-        <Puzzle className="size-5" />
-      </span>
+    <article className="border-border/70 bg-card/30 relative flex flex-col gap-3 rounded-xl border p-4">
+      <div className="absolute right-3 top-3">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground size-8 shrink-0">
+                <MoreVertical className="size-4" />
+                <span className="sr-only">Actions</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={onToggle}>
+                {enabled ? "Disable" : "Enable"}
+              </DropdownMenuItem>
+              {canPublish && onPublish && !publishStatus && (
+                <DropdownMenuItem onClick={onPublish}>
+                  <Share2 className="size-4" />
+                  Publish to store
+                </DropdownMenuItem>
+              )}
+              {canUninstall && onUninstall && (
+                <DropdownMenuItem variant="destructive" onClick={() => setUninstallDialogOpen(true)}>
+                  Uninstall
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+      </div>
+     
       <div className="flex flex-1 flex-col gap-2 min-w-0">
         <div className="flex flex-wrap items-center gap-1.5">
           <Badge variant="secondary" className="text-xs">
@@ -458,6 +684,16 @@ function SkillCard({
           {hasUpdate && (
             <Badge variant="outline" className="text-xs text-amber-600 dark:text-amber-400">
               Update
+            </Badge>
+          )}
+          {publishStatus === "approved" && (
+            <Badge variant="default" className="text-xs">
+              Approved
+            </Badge>
+          )}
+          {publishStatus === "pending" && (
+            <Badge variant="secondary" className="text-xs">
+              Pending review
             </Badge>
           )}
           <Badge variant={status === "eligible" ? "default" : status === "blocked" ? "destructive" : "secondary"}>
@@ -476,12 +712,39 @@ function SkillCard({
           </div>
         )}
         <div className="flex flex-wrap items-center gap-2 pt-1">
-          <Button variant={enabled ? "outline" : "secondary"} size="sm" className="h-8" onClick={onToggle}>
-            {enabled ? "Disable" : "Enable"}
-          </Button>
+          {publishStatus === "pending" && (
+            <span className="text-muted-foreground text-xs">Already submitted</span>
+          )}
+          {publishStatus === "approved" && (
+            <span className="text-muted-foreground text-xs">Published</span>
+          )}
           {source && <span className="text-xs text-muted-foreground capitalize">{source}</span>}
         </div>
       </div>
+      <Dialog open={uninstallDialogOpen} onOpenChange={setUninstallDialogOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Remove skill?</DialogTitle>
+            <DialogDescription>
+              &quot;{name}&quot; will be uninstalled. You can install it again from the hub later.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setUninstallDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                onUninstall?.();
+                setUninstallDialogOpen(false);
+              }}
+            >
+              Remove
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <SkillPermissionsForm
         entry={entry}
         onEntryUpdate={onEntryUpdate}
@@ -608,15 +871,13 @@ function SkillEnvForm({
         const visibleKey = `${slug}-${envVar}`;
         const visible = visibleSecretKeys[visibleKey];
         return (
-          <div key={envVar} className="min-w-[140px]">
-            <label className="text-muted-foreground block" htmlFor={id}>
-              {envVar}
-            </label>
-            <div className="relative mt-0.5">
-              <input
+          <Field key={envVar} className="min-w-[200px]">
+            <FieldLabel htmlFor={id}>{envVar}</FieldLabel>
+            <div className="relative">
+              <Input
                 id={id}
                 type={showEyeForKey(envVar) ? (visible ? "text" : "password") : "text"}
-                placeholder={isRedacted ? "(already set)" : envVar}
+                placeholder={isRedacted ? "(already set)" : `Enter ${envVar}`}
                 value={value}
                 onChange={(e) => {
                   const v = e.target.value;
@@ -626,16 +887,17 @@ function SkillEnvForm({
                   onEntryUpdate(updates);
                 }}
                 onBlur={() => onEntrySave(env, legacy)}
-                className={`border-input bg-background w-full rounded px-2 py-1 ${showEyeForKey(envVar) ? "pr-8" : ""} ${err ? "border-destructive" : ""}`}
+                className={`h-9 text-sm ${showEyeForKey(envVar) ? "pr-9" : ""} ${err ? "border-destructive" : ""}`}
                 aria-invalid={!!err}
                 aria-describedby={err ? `${id}-err` : undefined}
+                autoComplete="off"
               />
               {showEyeForKey(envVar) && (
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="absolute right-0 top-0 h-8 w-8 text-muted-foreground hover:text-foreground"
+                  className="absolute right-0 top-0 h-9 w-9 shrink-0 text-muted-foreground hover:text-foreground"
                   onClick={() => setVisibleSecretKeys((prev) => ({ ...prev, [visibleKey]: !prev[visibleKey] }))}
                   aria-label={visible ? "Hide" : "Show"}
                 >
@@ -644,11 +906,16 @@ function SkillEnvForm({
               )}
             </div>
             {err && (
-              <p id={`${id}-err`} className="text-destructive mt-0.5 text-xs">
+              <FieldError id={`${id}-err`}>
                 {err}
-              </p>
+              </FieldError>
             )}
-          </div>
+            {!err && showEyeForKey(envVar) && (
+              <FieldDescription>
+                Tokens and keys are stored securely. Use the eye icon to show or hide.
+              </FieldDescription>
+            )}
+          </Field>
         );
       })}
     </div>
@@ -659,12 +926,16 @@ function HubTab({
   skills,
   registrySkills,
   registryLoading,
+  systemRegistrySkills,
+  systemRegistryLoading,
   skillsSearch,
   setSelectedHubSkill,
 }: {
   skills: SkillsState["skills"];
   registrySkills: SkillsState["registrySkills"];
   registryLoading: boolean;
+  systemRegistrySkills: SkillsState["registrySkills"];
+  systemRegistryLoading: boolean;
   skillsSearch: string;
   setSelectedHubSkill: (s: AgentRegistrySkill | null) => void;
 }) {
@@ -673,67 +944,94 @@ function HubTab({
       .filter((s) => s.source === "user" || s.source === "workspace" || s.source === "managed")
       .map((s) => s.slug ?? s.name)
   );
-  const rows = registrySkills.filter((r) => !installedSlugs.has(r.slug));
-  const filtered = rows.filter(
-    (r) =>
-      !skillsSearch.trim() ||
-      (r.name || r.slug).toLowerCase().includes(skillsSearch.toLowerCase()) ||
-      (r.description || "").toLowerCase().includes(skillsSearch.toLowerCase())
-  );
+  const filterRows = (rows: AgentRegistrySkill[]) =>
+    rows
+      .filter((r) => !installedSlugs.has(r.slug))
+      .filter(
+        (r) =>
+          !skillsSearch.trim() ||
+          (r.name || r.slug).toLowerCase().includes(skillsSearch.toLowerCase()) ||
+          (r.description || "").toLowerCase().includes(skillsSearch.toLowerCase())
+      );
+  const systemFiltered = filterRows(systemRegistrySkills);
+  const communityFiltered = filterRows(registrySkills);
+  const loading = registryLoading || systemRegistryLoading;
+  const hasAny = systemFiltered.length > 0 || communityFiltered.length > 0;
 
-  if (registryLoading && !registrySkills.length) {
+  if (loading && !registrySkills.length && !systemRegistrySkills.length) {
     return <p className="text-muted-foreground text-sm">Loading…</p>;
   }
-  if (filtered.length === 0) {
+  if (!hasAny) {
     return (
       <p className="text-muted-foreground text-sm">
-        {rows.length === 0
-          ? "All hub skills are already installed, or the hub registry is empty."
-          : "No matching skills. Try a different search."}
+        {systemRegistrySkills.length === 0 && registrySkills.length === 0
+          ? "Hub registry is empty or not configured. Set VITE_SKILLS_REGISTRY_URL to your store URL."
+          : "All listed skills are already installed, or no matching search."}
       </p>
     );
   }
 
-  return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      {filtered.map((r) => {
-        const priceLabel =
-          r.priceCents != null && r.priceCents > 0 ? `$${(r.priceCents / 100).toFixed(2)}` : "Free";
-        return (
-          <article key={r.slug} className="border-border/70 bg-card/30 flex flex-col gap-3 rounded-xl border p-4">
-            <span className="bg-primary/10 text-primary flex size-10 shrink-0 items-center justify-center rounded-lg">
-              <Puzzle className="size-5" />
-            </span>
-            <div className="flex flex-1 flex-col gap-2 min-w-0">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <Badge variant="secondary" className="text-xs">
-                  {priceLabel}
-                </Badge>
-                {r.category && (
-                  <Badge variant="outline" className="text-xs">
-                    {r.category}
-                  </Badge>
-                )}
-                {r.version && <span className="text-xs text-muted-foreground">v{r.version}</span>}
-              </div>
-              <h3 className="font-semibold text-sm">{r.name || r.slug}</h3>
-              <p className="text-muted-foreground line-clamp-3 text-xs flex-1">{r.description || ""}</p>
-              {r.tags && r.tags.length > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {r.tags.slice(0, 4).map((t) => (
-                    <span key={t} className="text-xs text-muted-foreground/80">
-                      #{t}
-                    </span>
-                  ))}
-                </div>
-              )}
-              <Button variant="outline" size="sm" className="w-fit mt-1" onClick={() => setSelectedHubSkill(r)}>
-                View & install
-              </Button>
+  const SkillCard = ({ r }: { r: AgentRegistrySkill }) => {
+    const priceLabel =
+      r.priceCents != null && r.priceCents > 0 ? `$${(r.priceCents / 100).toFixed(2)}` : "Free";
+    return (
+      <article key={r.slug} className="border-border/70 bg-card/30 flex flex-col gap-3 rounded-xl border p-4">
+        <span className="bg-primary/10 text-primary flex size-10 shrink-0 items-center justify-center rounded-lg">
+          <Puzzle className="size-5" />
+        </span>
+        <div className="flex flex-1 flex-col gap-2 min-w-0">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Badge variant="secondary" className="text-xs">
+              {priceLabel}
+            </Badge>
+            {r.category && (
+              <Badge variant="outline" className="text-xs">
+                {r.category}
+              </Badge>
+            )}
+            {r.version && <span className="text-xs text-muted-foreground">v{r.version}</span>}
+          </div>
+          <h3 className="font-semibold text-sm">{r.name || r.slug}</h3>
+          <p className="text-muted-foreground line-clamp-3 text-xs flex-1">{r.description || ""}</p>
+          {r.tags && r.tags.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {r.tags.slice(0, 4).map((t) => (
+                <span key={t} className="text-xs text-muted-foreground/80">
+                  #{t}
+                </span>
+              ))}
             </div>
-          </article>
-        );
-      })}
+          )}
+          <Button variant="outline" size="sm" className="w-fit mt-1" onClick={() => setSelectedHubSkill(r)}>
+            View & install
+          </Button>
+        </div>
+      </article>
+    );
+  };
+
+  return (
+    <div className="space-y-6">
+      {systemFiltered.length > 0 && (
+        <section>
+          <h3 className="text-muted-foreground mb-3 text-sm font-medium">System skills</h3>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {systemFiltered.map((r) => (
+              <SkillCard key={r.slug} r={r} />
+            ))}
+          </div>
+        </section>
+      )}
+      {communityFiltered.length > 0 && (
+        <section>
+          <h3 className="text-muted-foreground mb-3 text-sm font-medium">Community / Hub</h3>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {communityFiltered.map((r) => (
+              <SkillCard key={r.slug} r={r} />
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }
@@ -813,7 +1111,7 @@ function SkillDetailSheet({
                 <Button
                   disabled={installingSlug !== null}
                   onClick={async () => {
-                    await onInstall(skill.slug, "workspace");
+                    await onInstall(skill.slug, "managed");
                     onClose();
                   }}
                 >

@@ -216,10 +216,25 @@ function collectFiles(base: string): { path: string; name: string }[] {
     if (stat.isFile() && (base.endsWith('.md') || base.endsWith('.txt'))) {
       files.push({ path: base, name: base.split(/[/\\]/).pop() || '' });
     } else if (stat.isDirectory()) {
-      const names = readdirSync(base).sort();
-      for (const n of names) {
-        if (!n.endsWith('.md') && !n.endsWith('.txt')) continue;
-        files.push({ path: join(base, n), name: n });
+      const entries = readdirSync(base, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+      const subdirSlugs = new Set<string>();
+      for (const e of entries) {
+        if (e.isDirectory() && !e.name.startsWith('.')) {
+          const readmePath = join(base, e.name, 'README.md');
+          const skillPath = join(base, e.name, 'SKILL.md');
+          const path = existsSync(readmePath) ? readmePath : existsSync(skillPath) ? skillPath : null;
+          if (path) {
+            subdirSlugs.add(e.name);
+            files.push({ path, name: `${e.name}.md` });
+          }
+        }
+      }
+      for (const e of entries) {
+        if (e.isFile() && (e.name.endsWith('.md') || e.name.endsWith('.txt'))) {
+          const slug = e.name.replace(/\.(md|txt)$/, '');
+          if (e.name.endsWith('.md') && subdirSlugs.has(slug)) continue;
+          files.push({ path: join(base, e.name), name: e.name });
+        }
       }
     }
   } catch (e) {
@@ -268,7 +283,7 @@ function loadContextFromPaths(): string {
   // Inject workspace path so the agent knows where to create skills and watch-folder automations.
   const workspaceSection =
     `## Workspace\n\n` +
-    `- **Skills**: \`${config.skillsWorkspaceDir}\` — use **write_file** with path \`${config.skillsWorkspaceDir}/<slug>/SKILL.md\` when creating a skill. Do not use \`~\` or \`$HOME\`.\n\n` +
+    `- **Skills you create**: use **write_file** with path \`${config.skillsWorkspaceMyDir}/<slug>/README.md\` (e.g. \`${config.skillsWorkspaceMyDir}/my-skill/README.md\`). Also create \`${config.skillsWorkspaceMyDir}/<slug>/tools.yaml\` with \`tools: []\` and a short comment so the user can add required tools there. Do not use \`~\` or \`$HOME\`. Hub-installed skills live in \`${config.skillsWorkspaceDir}/<slug>/\`; keep created-by-you skills in \`${config.skillsWorkspaceMyDir}/\`.\n\n` +
     `- **Scripts and watch-folder automations**: Workspace root is \`${config.workspaceDir}\`. When the user asks to watch a folder and do something (e.g. post new images to Bluesky or Facebook):\n` +
     `  1. Create a script under \`${config.workspaceDir}/scripts/\` (e.g. \`scripts/watch_bluesky.sh\` or \`scripts/watch_facebook.sh\`) that accepts the **file path as first argument** (\`$1\`) and uses env vars for credentials.\n` +
     `  2. Store credentials in \`${config.workspaceDir}/.env\` (e.g. \`BSKY_HANDLE=...\`, \`BSKY_APP_PASSWORD=...\` or \`PAGE_ACCESS_TOKEN=...\`). Use **write_file** to create or append lines to \`.env\`.\n` +

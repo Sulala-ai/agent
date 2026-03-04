@@ -13,12 +13,13 @@ vi.mock("../channels/discord.js", () => ({
   getEffectiveDiscordBotToken: vi.fn(),
 }));
 
-// Mock config for list_integrations_connections (portal vs integrations URL)
+// Mock config for list_integrations_connections (portal vs integrations URL) and spec-loader context path
 vi.mock("../config.js", () => ({
   config: {
     integrationsUrl: null as string | null,
     agentToolAllowlist: null,
     agentToolProfile: "full",
+    agentContextPath: "context",
   },
   getPortalGatewayBase: vi.fn(() => null as string | null),
   getEffectivePortalApiKey: vi.fn(() => null as string | null),
@@ -53,7 +54,7 @@ describe("integration tools", () => {
       const result = await (tool!.execute as (args: unknown) => Promise<unknown>)({});
       expect(result).toEqual({
         error:
-          "Stripe is not configured. Add a secret key in Settings → Channels (Stripe) or set STRIPE_SECRET_KEY.",
+          "Stripe is not configured. Add a secret key in Settings → Payment or set STRIPE_SECRET_KEY.",
       });
     });
 
@@ -148,9 +149,10 @@ describe("integration tools", () => {
         ],
         count: 2,
       });
-      expect(mockFetch).toHaveBeenCalledWith("https://discord.com/api/v10/users/@me/guilds", {
-        headers: { Authorization: "Bot bot_token_xxx" },
-      });
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://discord.com/api/v10/users/@me/guilds",
+        expect.objectContaining({ headers: { Authorization: "Bot bot_token_xxx" } })
+      );
     });
   });
 

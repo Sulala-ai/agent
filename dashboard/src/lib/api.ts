@@ -775,7 +775,7 @@ export type AgentSkill = {
   missing?: string[];
   /** Required env vars from skill metadata (e.g. BSKY_HANDLE, BSKY_APP_PASSWORD). Config stored by env key. */
   env?: string[];
-  source?: "user" | "workspace" | "managed" | "bundled" | "plugin" | "extra";
+  source?: "user" | "installed" | "workspace" | "managed" | "bundled" | "plugin" | "extra";
   category?: string;
   version?: string;
   tags?: string[];
@@ -808,18 +808,22 @@ export async function fetchAgentSkillsUpdates(): Promise<{ updates: SkillUpdateI
   return res.json();
 }
 
-/** Base URL for the hub (e.g. http://localhost:3002). */
+/** Base URL for the hub (set VITE_SKILLS_REGISTRY_URL to domain only, e.g. https://hub.sulala.ai). */
 export function getHubBaseUrl(): string | null {
   if (!HUB_REGISTRY_URL) return null;
-  return HUB_REGISTRY_URL.replace(/\/api\/sulalahub\/registry.*$/, "").replace(/\/$/, "") || HUB_REGISTRY_URL;
+  return HUB_REGISTRY_URL.replace(/\/$/, "");
 }
 
-/** URL to use for the hub registry (full path to /api/sulalahub/registry). */
+/** URL to use for the hub registry. */
 export function getHubRegistryUrl(): string | null {
-  if (!HUB_REGISTRY_URL) return null;
-  return HUB_REGISTRY_URL.includes("/api/sulalahub/registry")
-    ? HUB_REGISTRY_URL
-    : `${HUB_REGISTRY_URL.replace(/\/$/, "")}/api/sulalahub/registry`;
+  const base = getHubBaseUrl();
+  return base ? `${base}/api/sulalahub/registry` : null;
+}
+
+/** URL for system skills registry (hub store). Used when installing system skills so gateway fetches from this registry. */
+export function getHubSystemRegistryUrl(): string | null {
+  const base = getHubBaseUrl();
+  return base ? `${base}/api/sulalahub/system/registry` : null;
 }
 
 /** Install URL for a skill (use with `sulala skill install --from-url=URL`). */
@@ -839,6 +843,15 @@ export async function fetchAgentSkillsRegistry(): Promise<{ skills: AgentRegistr
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `Failed to fetch registry: ${res.status}`);
   }
+  return res.json();
+}
+
+/** Fetches system skills from the hub store (GET /api/sulalahub/system/registry). Used by Skills page "From Hub" tab to show system skills. */
+export async function fetchAgentSkillsSystemRegistry(): Promise<{ skills: AgentRegistrySkill[] }> {
+  const systemUrl = getHubSystemRegistryUrl();
+  if (!systemUrl) return { skills: [] };
+  const res = await fetch(systemUrl);
+  if (!res.ok) throw new Error(`Failed to fetch system registry: ${res.status}`);
   return res.json();
 }
 
@@ -869,7 +882,7 @@ export async function fetchAgentSkillsUpdate(): Promise<{
 
 export async function fetchAgentSkillUninstall(
   slug: string,
-  target: "managed" | "workspace"
+  target: "user" | "managed" | "workspace"
 ): Promise<{ uninstalled: string; path: string; target: string }> {
   const res = await fetch(`${GATEWAY_URL}/api/agent/skills/uninstall`, {
     method: "POST",
@@ -886,10 +899,14 @@ export async function fetchAgentSkillUninstall(
 export async function fetchAgentSkillInstall(
   slug: string,
   target: "managed" | "workspace",
-  opts?: { registryUrl?: string }
+  opts?: { registryUrl?: string; system?: boolean }
 ): Promise<{ installed: string; path: string; target: string }> {
   const body: { slug: string; target: string; registryUrl?: string } = { slug, target };
-  const registryUrl = opts?.registryUrl ?? getHubRegistryUrl() ?? undefined;
+  const registryUrl =
+    opts?.registryUrl ??
+    (opts?.system ? getHubSystemRegistryUrl() : null) ??
+    getHubRegistryUrl() ??
+    undefined;
   if (registryUrl) body.registryUrl = registryUrl;
   const res = await fetch(`${GATEWAY_URL}/api/agent/skills/install`, {
     method: "POST",
@@ -910,6 +927,39 @@ export async function fetchAgentSkills(): Promise<{ skills: AgentSkill[] }> {
     throw new Error(err.error || `Failed to fetch skills: ${res.status}`);
   }
   return res.json();
+}
+
+export type PublishSkillOptions = {
+  priceIntent?: "free" | "paid";
+  intendedPriceCents?: number;
+};
+
+export type PublishStatusItem = { slug: string; status: "pending" | "approved"; submittedAt?: string };
+
+export async function fetchAgentSkillsPublishStatus(): Promise<{ submissions: PublishStatusItem[] }> {
+  const res = await fetch(`${GATEWAY_URL}/api/agent/skills/publish-status`, { headers: headers() });
+  const data = await res.json().catch(() => ({}));
+  return { submissions: Array.isArray(data.submissions) ? data.submissions : [] };
+}
+
+export async function fetchAgentSkillPublish(
+  slug: string,
+  options?: PublishSkillOptions
+): Promise<{ published: boolean; slug: string; id?: string; message: string }> {
+  const res = await fetch(`${GATEWAY_URL}/api/agent/skills/publish`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({
+      slug,
+      priceIntent: options?.priceIntent ?? "free",
+      intendedPriceCents: options?.intendedPriceCents,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || `Publish failed: ${res.status}`);
+  }
+  return data;
 }
 
 export type SkillWizardApp = { id: string; label: string; envHint: string };

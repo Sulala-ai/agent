@@ -15,7 +15,9 @@ export const ONBOARD_ENV_WHITELIST = [
   'GATEWAY_API_KEY',
   'PORTAL_GATEWAY_URL',
   'PORTAL_API_KEY',
+  'STORE_PUBLISH_API_KEY',
   'ALLOWED_BINARIES',
+  'STRIPE_SECRET_KEY',
 ] as const;
 
 export type OnboardEnvKey = (typeof ONBOARD_ENV_WHITELIST)[number];

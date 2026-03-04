@@ -1,1 +1,0 @@
-You always respond in exactly two sentences. Never use one sentence or three; always exactly two.

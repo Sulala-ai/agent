@@ -30,7 +30,7 @@ export interface Config {
   agentToolRetryCount: number;
   /** When true, high-risk tools (write_file, run_command, register_automation) require user approval before running (env AGENT_EXECUTION_PREVIEW=1). */
   agentExecutionPreview: boolean;
-  /** Use Pi coding-agent runtime when true (env AGENT_USE_PI). Requires optional deps. Default false. */
+  /** Use Pi coding-agent runtime when true (env AGENT_USE_PI; default true, set to 0 or false to disable). Falls back to default loop when Pi requested but not available. */
   agentUsePi: boolean;
   /** Optional key for shared (cross-session) memory. When set, all sessions use this key for shared scope; when unset, session_key is used per identity (env AGENT_SHARED_MEMORY_KEY). */
   agentSharedMemoryKey: string | null;
@@ -42,14 +42,16 @@ export interface Config {
   portalApiKey: string | null;
   /** Optional Discord bot token (env DISCORD_BOT_TOKEN). When set, discord_list_guilds, discord_list_channels, discord_send_message are available. */
   discordBotToken: string | null;
-  /** Optional Stripe secret key (env STRIPE_SECRET_KEY). When set, stripe_* tools are available. Can override via Settings → Channels (Stripe). */
+  /** Optional Stripe secret key (env STRIPE_SECRET_KEY). When set, stripe_* tools are available. Can override via Settings → Payment. */
   stripeSecretKey: string | null;
   /** Bundled skills dir, e.g. <project>/context. */
   skillsBundledDir: string;
   /** Workspace root: ~/.sulala/workspace (env SULALA_WORKSPACE_DIR). Contains skills/, scripts/, .env, automations.json. Agent can write scripts and credentials here. */
   workspaceDir: string;
-  /** Workspace skills dir: ~/.sulala/workspace/skills/<skill-name>/SKILL.md (env SULALA_WORKSPACE_SKILLS_DIR). User-created skills here are not overwritten by project updates. */
+  /** Workspace skills dir: ~/.sulala/workspace/skills/<skill-name>/README.md (env SULALA_WORKSPACE_SKILLS_DIR). Hub-installed skills go here. */
   skillsWorkspaceDir: string;
+  /** "Created by me" skills: ~/.sulala/workspace/skills/my/<slug>/ (default skillsWorkspaceDir + '/my'). AI/user-created skills go here so they are separate from hub installs. */
+  skillsWorkspaceMyDir: string;
   /** Managed skills dir, e.g. ~/.sulala/skills (env SULALA_SKILLS_DIR). Flat .md files for registry installs. */
   skillsManagedDir: string;
   /** Extra skill dirs (env SKILLS_EXTRA_DIRS). */

@@ -10,7 +10,7 @@ import {
   fetchOAuthConnectUrl,
   type IntegrationItem,
 } from "@/lib/api";
-import { getAllIntegrationApps, getAppMeta } from "@/features/integrations/apps";
+import { getAllIntegrationApps } from "@/features/integrations/apps";
 
 export function useIntegrations(activePage: string, onError: (msg: string) => void) {
   const [integrations, setIntegrations] = useState<IntegrationItem[]>([]);
@@ -76,14 +76,6 @@ export function useIntegrations(activePage: string, onError: (msg: string) => vo
             }
             item.connections.push(c);
           }
-          const discordApp = getAppMeta("discord");
-          if (discordApp && !byProvider.has("discord")) {
-            items.push({ id: "discord", name: discordApp.name, iconUrl: discordApp.logoUrl ?? "", description: discordApp.description, connections: [], tokenOnly: true });
-          }
-          const stripeApp = getAppMeta("stripe");
-          if (stripeApp && !byProvider.has("stripe")) {
-            items.push({ id: "stripe", name: stripeApp.name, iconUrl: stripeApp.logoUrl ?? "", description: stripeApp.description, connections: [], tokenOnly: true });
-          }
           setIntegrations(items);
         } catch {
           setIntegrations(getAllIntegrationApps().map((app) => ({
@@ -101,16 +93,6 @@ export function useIntegrations(activePage: string, onError: (msg: string) => vo
       const baseUrl = config.integrationsUrl ?? undefined;
       setIntegrationsBaseUrl(baseUrl);
       const { integrations: list } = await Promise.race([fetchIntegrations(baseUrl), timeoutPromise]);
-      const hasDiscord = list.some((i) => i.id === "discord");
-      if (!hasDiscord) {
-        const discordApp = getAppMeta("discord");
-        if (discordApp) list.push({ id: "discord", name: discordApp.name, iconUrl: discordApp.logoUrl ?? "", description: discordApp.description, connections: [], tokenOnly: true });
-      }
-      const hasStripe = list.some((i) => i.id === "stripe");
-      if (!hasStripe) {
-        const stripeApp = getAppMeta("stripe");
-        if (stripeApp) list.push({ id: "stripe", name: stripeApp.name, iconUrl: stripeApp.logoUrl ?? "", description: stripeApp.description, connections: [], tokenOnly: true });
-      }
       setIntegrations(list);
     } catch (e) {
       onError((e as Error).message);

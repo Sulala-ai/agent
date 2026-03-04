@@ -13,20 +13,16 @@ import {
   updateChannelsTelegram,
   fetchChannelsDiscord,
   updateChannelsDiscord,
-  fetchChannelsStripe,
-  updateChannelsStripe,
   fetchConfig,
   fetchAgentModels,
   type TelegramChannelState,
   type DiscordChannelState,
-  type StripeChannelState,
   type Config,
   type AgentModel,
 } from "@/lib/api";
 import { ExternalLink, Send } from "lucide-react";
 
 const DISCORD_INVITE_DOCS = "https://discord.com/developers/applications";
-const STRIPE_DASHBOARD = "https://dashboard.stripe.com/apikeys";
 
 export function ChannelsPage() {
   const [state, setState] = useState<TelegramChannelState | null>(null);
@@ -48,23 +44,17 @@ export function ChannelsPage() {
   const [discordBotToken, setDiscordBotToken] = useState("");
   const [discordSaving, setDiscordSaving] = useState(false);
 
-  const [stripeState, setStripeState] = useState<StripeChannelState | null>(null);
-  const [stripeSecretKey, setStripeSecretKey] = useState("");
-  const [stripeSaving, setStripeSaving] = useState(false);
-
   const load = async () => {
     setLoading(true);
     setError(null);
     try {
-      const [data, discordData, stripeData, cfg] = await Promise.all([
+      const [data, discordData, cfg] = await Promise.all([
         fetchChannelsTelegram(),
         fetchChannelsDiscord(),
-        fetchChannelsStripe(),
         fetchConfig(),
       ]);
       setState(data);
       setDiscordState(discordData);
-      setStripeState(stripeData);
       setConfig(cfg);
       setEnabled(data.enabled);
       setBotToken(""); // never show token
@@ -143,22 +133,6 @@ export function ChannelsPage() {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setDiscordSaving(false);
-    }
-  };
-
-  const handleSaveStripe = async () => {
-    setStripeSaving(true);
-    setError(null);
-    try {
-      const data = await updateChannelsStripe({
-        secretKey: stripeSecretKey.trim() || null,
-      });
-      setStripeState(data);
-      setStripeSecretKey("");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setStripeSaving(false);
     }
   };
 
@@ -429,67 +403,6 @@ export function ChannelsPage() {
 
           <Button onClick={handleSaveDiscord} disabled={discordSaving}>
             {discordSaving ? "Saving…" : "Save"}
-          </Button>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Stripe</CardTitle>
-          <CardDescription>
-            Let the agent list customers and invoices, and create invoices. Paste your Stripe Secret Key (from Dashboard → API keys). Use test key (sk_test_…) for development.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {stripeState && (
-            <div className="space-y-1 text-sm">
-              <div className="flex items-center gap-2">
-                <span className="text-muted-foreground">Status:</span>
-                {stripeState.configured ? (
-                  <span className="text-green-600 dark:text-green-400">Configured</span>
-                ) : (
-                  <span className="text-muted-foreground">Not configured</span>
-                )}
-              </div>
-            </div>
-          )}
-
-          <div className="space-y-2">
-            <label htmlFor="stripe-secret-key" className="text-sm font-medium">
-              Secret key
-            </label>
-            <Input
-              id="stripe-secret-key"
-              type="password"
-              placeholder={stripeState?.configured ? "(already set)" : "sk_test_… or sk_live_…"}
-              value={stripeSecretKey}
-              onChange={(e) => setStripeSecretKey(e.target.value)}
-              autoComplete="off"
-              className="font-mono text-sm"
-            />
-            <p className="text-muted-foreground text-xs">
-              Get a key from Stripe Dashboard → Developers → API keys. Leave blank to keep the current key.
-            </p>
-          </div>
-
-          <p className="text-muted-foreground text-xs">
-            <a
-              href={STRIPE_DASHBOARD}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-primary hover:underline"
-            >
-              Open Stripe API keys
-              <ExternalLink className="size-3" />
-            </a>
-          </p>
-
-          {error && (
-            <p className="text-destructive text-sm">{error}</p>
-          )}
-
-          <Button onClick={handleSaveStripe} disabled={stripeSaving}>
-            {stripeSaving ? "Saving…" : "Save"}
           </Button>
         </CardContent>
       </Card>

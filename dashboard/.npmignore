@@ -1,0 +1,4 @@
+# Publish the built dashboard bundle for @sulala/agent.
+*
+!dist/
+!dist/**

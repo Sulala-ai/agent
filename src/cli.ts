@@ -2,6 +2,7 @@
 /**
  * Sulala CLI — status, tasks, logs, enqueue, skill install, init.
  */
+import 'dotenv/config';
 import { mkdirSync, existsSync, copyFileSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -133,8 +134,9 @@ async function skillUninstall(slug: string, global: boolean): Promise<void> {
   }
 }
 
-async function skillInstall(slug: string, global: boolean, registryUrl?: string): Promise<void> {
-  const target = global ? 'managed' : 'workspace';
+async function skillInstall(slug: string, _global: boolean, registryUrl?: string): Promise<void> {
+  // Install from hub always goes to workspace skills dir (~/.sulala/workspace/skills/<slug>/README.md + tools.yaml)
+  const target = 'managed';
   const result = await installSkill(slug, target, { registryUrl });
   if (result.success) {
     console.log(JSON.stringify({ installed: slug, path: result.path, target }));
@@ -144,11 +146,11 @@ async function skillInstall(slug: string, global: boolean, registryUrl?: string)
   }
 }
 
-async function skillInstallFromUrl(skillUrl: string, global: boolean): Promise<void> {
-  const target = global ? 'managed' : 'workspace';
-  const result = await installSkillFromUrl(skillUrl, target);
+async function skillInstallFromUrl(skillUrl: string, _global: boolean): Promise<void> {
+  // Install from URL (hub/store) always goes to workspace skills dir (~/.sulala/workspace/skills), not project context
+  const result = await installSkillFromUrl(skillUrl, 'managed');
   if (result.success) {
-    console.log(JSON.stringify({ installed: result.slug, path: result.path, target }));
+    console.log(JSON.stringify({ installed: result.slug, path: result.path, target: 'managed' }));
   } else {
     console.error(result.error || 'Install failed');
     process.exit(1);
@@ -201,7 +203,7 @@ async function doctor(): Promise<void> {
 
 async function init(targetDir: string): Promise<void> {
   const cwd = targetDir || process.cwd();
-  const dirs = [join(cwd, 'config'), join(cwd, 'context'), join(cwd, 'registry')];
+  const dirs = [join(cwd, 'config'), join(cwd, 'context')];
   for (const d of dirs) {
     if (!existsSync(d)) {
       mkdirSync(d, { recursive: true });
@@ -313,12 +315,18 @@ Env: GATEWAY_URL, GATEWAY_API_KEY, SULALA_SKILLS_DIR, AGENT_CONTEXT_PATH
         else if (sub === 'update') await skillUpdate();
         else if (sub === 'install') {
           const fromUrl = typeof opts['from-url'] === 'string' ? opts['from-url'] : undefined;
-          const registryUrl = typeof opts.registry === 'string' ? opts.registry : undefined;
+          let registryUrl = typeof opts.registry === 'string' ? opts.registry : undefined;
           if (fromUrl) {
             await skillInstallFromUrl(fromUrl, !!opts.global);
           } else {
             const slug = args[2];
             if (!slug) throw new Error('skill install requires <slug> or --from-url=URL');
+            const hubBase = process.env.SKILLS_REGISTRY_URL?.trim()?.replace(/\/$/, '');
+            if (!registryUrl && hubBase) {
+              registryUrl = slug.startsWith('system-')
+                ? `${hubBase}/api/sulalahub/system/registry`
+                : `${hubBase}/api/sulalahub/registry`;
+            }
             await skillInstall(slug, !!opts.global, registryUrl);
           }
         } else if (sub === 'uninstall') {

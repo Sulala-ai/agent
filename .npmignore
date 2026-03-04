@@ -1,0 +1,3 @@
+# Intentionally empty.
+# This disables npm's fallback to .gitignore during publish/pack.
+# Packaging is controlled by package.json "files".
