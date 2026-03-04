@@ -1,0 +1,13 @@
+node_modules/
+.env
+data/*.db
+*.log
+.DS_Store
+dist/
+dashboard/dist/
+uploads/
+desktop/agent-app/
+desktop/release/
+
+# Internal docs (not for public repo)
+docs/private/

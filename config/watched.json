@@ -1,0 +1,4 @@
+{
+  "folders": [],
+  "comment": "Add paths here or set env WATCH_FOLDERS (comma-separated). Or ask the agent to watch a folder; it will register an automation under ~/.sulala/workspace/."
+}

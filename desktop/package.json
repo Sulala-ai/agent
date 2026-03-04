@@ -1,0 +1,43 @@
+{
+  "name": "sulala-agent-desktop",
+  "version": "0.1.8",
+  "description": "Sulala Agent — desktop app for Mac and Windows",
+  "main": "main.cjs",
+  "author": "Sulala",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "33.2.0",
+    "electron-builder": "25.1.8"
+  },
+  "build": {
+    "appId": "ai.sulala.agent",
+    "productName": "Sulala Agent",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.cjs",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "agent-app",
+        "to": "agent-app"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": ["dmg", "zip"],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "identity": null
+    },
+    "win": {
+      "target": ["nsis", "portable"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

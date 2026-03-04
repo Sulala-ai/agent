@@ -1,0 +1,10 @@
+{
+  "schedules": [
+    {
+      "cron": "0 9 * * *",
+      "type": "daily-post-bluesky",
+      "payload": {}
+    }
+  ],
+  "comment": "Cron format: minute hour day-of-month month day-of-week. Example: 0 9 * * * = 9:00 every day. Task type must be handled by a plugin or skill (e.g. daily-post-bluesky, daily-email-to-notion)."
+}

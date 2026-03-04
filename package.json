@@ -1,0 +1,86 @@
+{
+  "name": "@sulala/agent",
+  "version": "0.1.11",
+  "description": "Local AI orchestration platform — file watcher, task scheduler, AI layer, plugins",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "install-ollama": "node install-ollama.cjs",
+    "gateway": "tsx src/gateway/server.ts",
+    "dashboard": "cd dashboard && npm run dev",
+    "dashboard:build": "cd dashboard && npm run build",
+    "cli": "tsx src/cli.ts",
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc && cp src/db/schema.sql dist/db/",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src",
+    "release:check": "npm pack --dry-run",
+    "desktop": "electron desktop/",
+    "desktop:stage": "node desktop/copy-agent-app.cjs",
+    "desktop:pack": "npm run build && npm run dashboard:build && npm run desktop:stage && cd desktop && npm install && electron-builder",
+    "desktop:pack:mac": "npm run build && npm run dashboard:build && npm run desktop:stage && cd desktop && npm install && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac",
+    "desktop:pack:win": "npm run build && npm run dashboard:build && npm run desktop:stage && cd desktop && npm install && electron-builder --win"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "ai",
+    "orchestration",
+    "automation",
+    "file-watcher",
+    "local"
+  ],
+  "license": "MIT",
+  "files": [
+    "dist",
+    "bin",
+    "src/db/schema.sql",
+    "registry",
+    "context",
+    "dashboard/dist"
+  ],
+  "prepublishOnly": "pnpm run build && pnpm run dashboard:build",
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "sulala": "bin/sulala.mjs"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.6.0",
+    "chokidar": "^4.0.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1",
+    "grammy": "^1.40.1",
+    "node-cron": "^3.0.3",
+    "openai": "^6.25.0",
+    "ws": "^8.18.0"
+  },
+  "optionalDependencies": {
+    "@mariozechner/pi-agent-core": "0.54.0",
+    "@mariozechner/pi-ai": "0.54.0",
+    "@mariozechner/pi-coding-agent": "0.54.0"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "@eslint/js": "^10.0.1",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.3.1",
+    "@types/node-cron": "^3.0.11",
+    "@types/ws": "^8.18.1",
+    "@typescript-eslint/eslint-plugin": "^8.56.1",
+    "@typescript-eslint/parser": "^8.56.1",
+    "eslint": "^10.0.2",
+    "globals": "^17.3.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}

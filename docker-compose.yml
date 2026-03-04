@@ -1,0 +1,19 @@
+# Sulala Agent — run gateway + watcher + scheduler + dashboard.
+# Optional: mount ./data for SQLite persistence and ./config for watched.json.
+services:
+  sulala:
+    build: .
+    ports:
+      - "2026:2026"
+    environment:
+      - PORT=2026
+      - HOST=0.0.0.0
+      - DB_PATH=/data/sulala.db
+      # Optional: add OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.
+    volumes:
+      - sulala-data:/data
+      - ./config:/app/config:ro
+    restart: unless-stopped
+
+volumes:
+  sulala-data:

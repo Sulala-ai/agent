@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AutomationIdea",
+  "description": "Config-driven automation idea for the chat suggestion bar",
+  "type": "object",
+  "required": ["id", "title", "description", "base_prompt", "required_integrations", "optional_integrations"],
+  "properties": {
+    "id": { "type": "string" },
+    "title": { "type": "string" },
+    "description": { "type": "string" },
+    "base_prompt": { "type": "string" },
+    "required_integrations": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "optional_integrations": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": false
+}
