@@ -183,28 +183,45 @@ export function migrateConfigNameKeysToSlug(
   }
 }
 
-/** Onboarding: persisted in config for first-launch detection. Existing users with env keys are treated as complete. */
+/** Whether the config file is empty (missing, or parses to {} / no onboarding state). Empty config = onboarding not finished. */
+function isConfigEmpty(full: SulalaConfig): boolean {
+  if (full.onboardingComplete === true || full.onboardingComplete === false) return false;
+  const keys = Object.keys(full);
+  if (keys.length === 0) return true;
+  if (keys.length === 1 && full.skills) {
+    const entryKeys = Object.keys(full.skills.entries ?? {});
+    if (entryKeys.length === 0) return true;
+  }
+  return false;
+}
+
+/** Onboarding: persisted in config for first-launch detection. When .sulala/config is empty (or missing), onboarding is not finished → show onboarding. */
 export function getOnboardingComplete(): boolean {
   const full = loadFullConfig();
   if (full.onboardingComplete === true) return true;
   // Explicit reset: set to false in config to see onboarding again
   if (full.onboardingComplete === false) return false;
-  // Migration: existing users with API keys are considered onboarded (do not write)
-  const envPath = join(homedir(), '.sulala', '.env');
-  if (existsSync(envPath)) {
-    try {
-      const content = readFileSync(envPath, 'utf8');
-      const hasKey = content.split('\n').some((line) => {
-        const t = line.trim();
-        if (!t || t.startsWith('#')) return false;
-        const eq = t.indexOf('=');
-        return eq > 0 && t.slice(eq + 1).trim().length > 0;
-      });
-      if (hasKey) return true;
-    } catch {
-      /* ignore */
+  // Empty config (no onboardingComplete, no meaningful content) = onboarding not finished → show onboarding
+  if (isConfigEmpty(full)) {
+    // Migration: existing users with API keys in ~/.sulala/.env are considered onboarded
+    const envPath = join(homedir(), '.sulala', '.env');
+    if (existsSync(envPath)) {
+      try {
+        const content = readFileSync(envPath, 'utf8');
+        const hasKey = content.split('\n').some((line) => {
+          const t = line.trim();
+          if (!t || t.startsWith('#')) return false;
+          const eq = t.indexOf('=');
+          return eq > 0 && t.slice(eq + 1).trim().length > 0;
+        });
+        if (hasKey) return true;
+      } catch {
+        /* ignore */
+      }
     }
+    return false;
   }
+  // Config has other content but no onboardingComplete: still not complete
   return false;
 }
 
