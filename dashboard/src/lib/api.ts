@@ -375,14 +375,8 @@ export type Config = {
   integrationsMode?: "portal" | "direct" | null;
   /** Portal base URL when integrationsMode === 'portal'. */
   portalGatewayUrl?: string | null;
-  /** ChatGPT Apps SDK / MCP OAuth 2.1 config (onboarding and settings). */
-  chatgptOAuth?: {
-    enabled: boolean;
-    resourceUrl: string | null;
-    authorizationServer: string | null;
-    scopesSupported: string[];
-    redirectUrisHint: string[];
-  };
+  /** When true, agent has PORTAL_OAUTH_CLIENT_ID set; dashboard can show "Connect with Sulala (OAuth)". */
+  portalOAuthConnectAvailable?: boolean;
 };
 
 export type AgentModel = { id: string; name: string };
@@ -558,6 +552,17 @@ export async function deleteIntegrationsConnection(id: string, baseUrl?: string 
 export async function fetchConfig(): Promise<Config> {
   const res = await fetch(`${GATEWAY_URL}/api/config`, { headers: headers(), cache: "no-store" });
   if (!res.ok) throw new Error(`Failed to fetch config: ${res.status}`);
+  return res.json();
+}
+
+/** Get Portal "Connect with Sulala" OAuth URL. Redirect user to this URL to start the flow. Optional return_to (e.g. onboarding_step_3) is passed back after callback. */
+export async function fetchOAuthConnectUrl(return_to?: string): Promise<{ url: string }> {
+  const q = return_to?.trim() ? `?return_to=${encodeURIComponent(return_to.trim())}` : "";
+  const res = await fetch(`${GATEWAY_URL}/api/oauth/connect-url${q}`, { headers: headers(), cache: "no-store" });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || `Failed to get Connect URL: ${res.status}`);
+  }
   return res.json();
 }
 

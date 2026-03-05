@@ -10,7 +10,7 @@ function parseModelSizeBytes(sizeStr: string): number | null {
   if (unit === "MB") return Math.round(val * 1024 * 1024);
   return null;
 }
-import { ChevronRight, Check, Copy, Cpu, HardDrive, Zap } from "lucide-react";
+import { ChevronRight, Check, Cpu, HardDrive, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -20,7 +20,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useEffect, useState } from "react";
 import { useOnboarding, PROVIDERS, PROVIDER_ENV_KEYS } from "../hooks/useOnboarding";
 import type { RecommendedOllamaModel } from "@/lib/api";
-import { putOnboardEnv, fetchConfig } from "@/lib/api";
+import { putOnboardEnv, fetchOAuthConnectUrl, fetchConfig } from "@/lib/api";
 
 const OnboardingContext = createContext<ReturnType<typeof useOnboarding> | null>(null);
 function useOnboardingContext() {
@@ -218,28 +218,17 @@ function Step3Integrations() {
   const portalConfigured = envKeys.PORTAL_API_KEY === "set" || hasPortalInput;
   const hasOllama = selectedProviders.includes("ollama");
   const nextStep = hasOllama ? 4 : 3;
+  const [oauthStarting, setOauthStarting] = useState(false);
+  const [oauthOpened, setOauthOpened] = useState(false);
   /** Portal gateway URL from agent config (.env / ~/.sulala/.env), or default. */
   const [portalGatewayUrl, setPortalGatewayUrl] = useState<string>(DEFAULT_PORTAL_GATEWAY_URL);
-  /** ChatGPT Apps SDK / MCP OAuth 2.1 (optional). */
-  const [mcpOAuthEnabled, setMcpOAuthEnabled] = useState(false);
-  const [mcpOAuthResourceUrl, setMcpOAuthResourceUrl] = useState("");
-  const [mcpOAuthAuthServer, setMcpOAuthAuthServer] = useState("");
-  const [mcpOAuthScopes, setMcpOAuthScopes] = useState("openid");
-  const [mcpOAuthSaving, setMcpOAuthSaving] = useState(false);
-  const [mcpOAuthSaved, setMcpOAuthSaved] = useState(false);
+  const { loadEnv } = useOnboardingContext();
 
   useEffect(() => {
     fetchConfig()
       .then((c) => {
         const url = (c.portalGatewayUrl ?? "").trim() || DEFAULT_PORTAL_GATEWAY_URL;
         setPortalGatewayUrl(url);
-        const co = c.chatgptOAuth;
-        if (co) {
-          setMcpOAuthEnabled(!!co.enabled);
-          setMcpOAuthResourceUrl(co.resourceUrl ?? "");
-          setMcpOAuthAuthServer(co.authorizationServer ?? "");
-          setMcpOAuthScopes(Array.isArray(co.scopesSupported) && co.scopesSupported.length ? co.scopesSupported.join(", ") : "openid");
-        }
       })
       .catch(() => {});
   }, []);
@@ -248,10 +237,31 @@ function Step3Integrations() {
     saveEnv(nextStep, { PORTAL_GATEWAY_URL: portalGatewayUrl });
   };
 
+  const handleOAuthConnect = async () => {
+    setError(null);
+    setOauthStarting(true);
+    try {
+      await putOnboardEnv({ PORTAL_GATEWAY_URL: portalGatewayUrl });
+      const { url } = await fetchOAuthConnectUrl("onboarding_step_3");
+      window.open(url, "_blank", "noopener,noreferrer");
+      // In Electron the URL opens in system browser and window.open returns null; still show "I've signed in" UI.
+      setOauthOpened(true);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setOauthStarting(false);
+    }
+  };
+
+  const handleOAuthDone = async () => {
+    setError(null);
+    await loadEnv();
+  };
+
   return (
     <div className="space-y-6">
       <p className="text-muted-foreground text-sm">
-        Connect with Sulala to use GitHub, Gmail, and other apps. Enter your Portal API key below.
+        Connect with Sulala to use GitHub, Gmail, and other apps. Use OAuth (no API key) or enter an API key below.
       </p>
       <div className="grid gap-4">
         <div className="space-y-2">
@@ -268,6 +278,17 @@ function Step3Integrations() {
             Use <code className="rounded bg-muted px-1">http://localhost:3004/api/gateway</code> for local Portal, or leave default for portal.sulala.ai
           </p>
         </div>
+        <div className="flex flex-col gap-2">
+          <Label>Connect with Sulala</Label>
+          <Button
+            variant="outline"
+            onClick={handleOAuthConnect}
+            disabled={oauthStarting}
+          >
+            {oauthStarting ? "Opening…" : "Connect with Sulala (OAuth)"}
+          </Button>
+        </div>
+        <div className="text-muted-foreground text-xs">Or use an API key:</div>
         <a
           href={
             portalGatewayUrl
@@ -293,115 +314,6 @@ function Step3Integrations() {
             autoComplete="off"
           />
         </div>
-
-        {/* ChatGPT Apps SDK / MCP OAuth 2.1 — optional setup for ChatGPT connector */}
-        <div className="border-border space-y-3 rounded-lg border p-4">
-          <div className="flex items-center gap-2">
-            <Checkbox
-              id="mcp-oauth-enabled"
-              checked={mcpOAuthEnabled}
-              onCheckedChange={(v) => setMcpOAuthEnabled(v === true)}
-            />
-            <Label htmlFor="mcp-oauth-enabled" className="cursor-pointer font-medium">
-              Enable ChatGPT (Apps SDK) OAuth
-            </Label>
-          </div>
-          <p className="text-muted-foreground text-xs">
-            Expose this agent as an MCP resource server so ChatGPT can connect with OAuth 2.1 (Auth0, Stytch, etc.). You must host this agent at a public HTTPS URL and configure your IdP with the redirect URIs below.
-          </p>
-          {mcpOAuthEnabled && (
-            <>
-              <div className="space-y-2">
-                <Label htmlFor="mcp-oauth-resource">Resource URL (this MCP server)</Label>
-                <Input
-                  id="mcp-oauth-resource"
-                  type="url"
-                  placeholder="https://your-agent.example.com"
-                  value={mcpOAuthResourceUrl}
-                  onChange={(e) => setMcpOAuthResourceUrl(e.target.value.trim())}
-                  className="font-mono text-xs"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="mcp-oauth-auth-server">Authorization server (IdP issuer URL)</Label>
-                <Input
-                  id="mcp-oauth-auth-server"
-                  type="url"
-                  placeholder="https://tenant.auth0.com or https://api.stytch.com/v1/"
-                  value={mcpOAuthAuthServer}
-                  onChange={(e) => setMcpOAuthAuthServer(e.target.value.trim())}
-                  className="font-mono text-xs"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="mcp-oauth-scopes">Scopes (comma-separated)</Label>
-                <Input
-                  id="mcp-oauth-scopes"
-                  type="text"
-                  placeholder="openid, files:read"
-                  value={mcpOAuthScopes}
-                  onChange={(e) => setMcpOAuthScopes(e.target.value.trim() || "openid")}
-                  className="font-mono text-xs"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-muted-foreground text-xs">Allowlist these redirect URIs in your IdP</Label>
-                <div className="bg-muted/50 flex flex-col gap-1 rounded p-2 font-mono text-xs">
-                  <div className="flex items-center gap-2">
-                    <code className="flex-1 break-all">https://chatgpt.com/connector/oauth/&#123;callback_id&#125;</code>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="shrink-0 size-7"
-                      onClick={() => navigator.clipboard.writeText("https://chatgpt.com/connector/oauth/{callback_id}")}
-                    >
-                      <Copy className="size-3" />
-                    </Button>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <code className="flex-1 break-all">https://platform.openai.com/apps-manage/oauth</code>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="shrink-0 size-7"
-                      onClick={() => navigator.clipboard.writeText("https://platform.openai.com/apps-manage/oauth")}
-                    >
-                      <Copy className="size-3" />
-                    </Button>
-                  </div>
-                </div>
-              </div>
-              <Button
-                type="button"
-                size="sm"
-                disabled={mcpOAuthSaving || !mcpOAuthResourceUrl.trim() || !mcpOAuthAuthServer.trim()}
-                onClick={async () => {
-                  setMcpOAuthSaving(true);
-                  setError(null);
-                  try {
-                    await putOnboardEnv({
-                      MCP_OAUTH_ENABLED: mcpOAuthEnabled ? "1" : "0",
-                      MCP_OAUTH_RESOURCE_URL: mcpOAuthResourceUrl.trim(),
-                      MCP_OAUTH_AUTHORIZATION_SERVER: mcpOAuthAuthServer.trim(),
-                      MCP_OAUTH_SCOPES_SUPPORTED: mcpOAuthScopes.trim() || "openid",
-                    });
-                    setMcpOAuthSaved(true);
-                    setTimeout(() => setMcpOAuthSaved(false), 2000);
-                    await loadEnv();
-                  } catch (e) {
-                    setError((e as Error).message);
-                  } finally {
-                    setMcpOAuthSaving(false);
-                  }
-                }}
-              >
-                {mcpOAuthSaving ? "Saving…" : mcpOAuthSaved ? "Saved" : "Save ChatGPT OAuth settings"}
-              </Button>
-            </>
-          )}
-        </div>
       </div>
       {error && <div className="text-destructive text-sm">{error}</div>}
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -409,6 +321,14 @@ function Step3Integrations() {
           <Button variant="outline" onClick={() => setStep(1)}>
             Back
           </Button>
+          {oauthOpened && (
+            <>
+              <span className="text-muted-foreground text-sm">Sign-in opened in your browser. Close that tab and return here when done.</span>
+              <Button variant="secondary" size="sm" onClick={handleOAuthDone}>
+                I've signed in — continue
+              </Button>
+            </>
+          )}
         </div>
         <div className="flex gap-2">
           {portalConfigured && !hasPortalInput && (
@@ -620,6 +540,8 @@ function Step6Finish() {
 
 type OnboardingFlowProps = { onComplete?: () => void };
 
+const ONBOARDING_STEP_3_RETURN = "onboarding_step_3";
+
 export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
   const onboarding = useOnboarding(onComplete);
   const { step, selectedProviders, setStep, loadEnv, setError } = onboarding;
@@ -628,6 +550,24 @@ export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
   const stepLabels = hasOllama ? STEP_LABELS_WITH_OLLAMA : STEP_LABELS_WITHOUT_OLLAMA;
   const current = Math.max(0, Math.min(step, totalSteps - 1));
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const return_to = params.get("return_to");
+    const oauth = params.get("oauth");
+    const message = params.get("message");
+    if (return_to !== ONBOARDING_STEP_3_RETURN || !oauth) return;
+    setStep(2);
+    loadEnv();
+    if (oauth === "error" && message) {
+      const msg = message === "exchange_failed" ? "Token exchange failed. Check PORTAL_OAUTH_CLIENT_SECRET and redirect_uri." : message === "no_token" ? "No access token in response." : message;
+      setError(msg);
+    }
+    const u = new URL(window.location.href);
+    u.searchParams.delete("oauth");
+    u.searchParams.delete("return_to");
+    u.searchParams.delete("message");
+    window.history.replaceState({}, "", u.toString());
+  }, [setStep, loadEnv, setError]);
 
   const cardDescriptions: Record<number, string> = {
     0: "Choose which AI providers you want to use.",
