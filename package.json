@@ -1,6 +1,6 @@
 {
   "name": "@sulala/agent",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "Local AI orchestration platform — file watcher, task scheduler, AI layer, plugins",
   "type": "module",
   "main": "src/index.ts",
@@ -8,10 +8,11 @@
     "start": "tsx src/index.ts",
     "install-ollama": "node install-ollama.cjs",
     "gateway": "tsx src/gateway/server.ts",
-    "dashboard": "cd dashboard && npm run dev",
-    "dashboard:build": "cd dashboard && npm run build",
+    "dashboard": "cd dashboard && vite",
+    "dashboard:build": "cd dashboard && tsc -b && vite build",
     "cli": "tsx src/cli.ts",
-    "dev": "tsx watch src/index.ts",
+    "dev": "concurrently -n agent,dashboard -c blue,green \"npm run dev:agent\" \"npm run dashboard\"",
+    "dev:agent": "tsx watch src/index.ts",
     "build": "tsc && cp src/db/schema.sql dist/db/",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -58,7 +59,22 @@
     "node-cron": "^3.0.3",
     "openai": "^6.25.0",
     "ws": "^8.18.0",
-    "yaml": "^2.7.0"
+    "yaml": "^2.7.0",
+    "@tailwindcss/vite": "^4.2.1",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.575.0",
+    "radix-ui": "^1.4.3",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "tailwind-merge": "^3.5.0",
+    "tailwindcss": "^4.2.1"
+  },
+  "overrides": {
+    "eslint-plugin-react-hooks": { "eslint": "$eslint" },
+    "eslint-plugin-react-refresh": { "eslint": "$eslint" }
   },
   "optionalDependencies": {
     "@mariozechner/pi-agent-core": "0.54.0",
@@ -66,6 +82,7 @@
     "@mariozechner/pi-coding-agent": "0.54.0"
   },
   "devDependencies": {
+    "concurrently": "^9.1.2",
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8",
     "@eslint/js": "^10.0.1",
@@ -73,13 +90,22 @@
     "@types/express": "^5.0.6",
     "@types/node": "^25.3.1",
     "@types/node-cron": "^3.0.11",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
     "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^8.56.1",
     "@typescript-eslint/parser": "^8.56.1",
+    "@vitejs/plugin-react": "^5.1.1",
     "eslint": "^10.0.2",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.4.24",
     "globals": "^17.3.0",
+    "shadcn": "^3.8.5",
     "tsx": "^4.21.0",
+    "tw-animate-css": "^1.4.0",
     "typescript": "^5.9.3",
+    "typescript-eslint": "^8.48.0",
+    "vite": "^7.3.1",
     "vitest": "^4.0.18"
   }
 }
