@@ -35,8 +35,6 @@ export function IntegrationsPage({
     const params = new URLSearchParams(window.location.search);
     const connectionId = params.get("connectionId");
     const error = params.get("error");
-    const oauth = params.get("oauth");
-    const oauthMessage = params.get("message");
     if (connectionId || error) {
       if (error && onError) {
         try {
@@ -49,16 +47,6 @@ export function IntegrationsPage({
       const u = new URL(window.location.href);
       u.searchParams.delete("connectionId");
       u.searchParams.delete("error");
-      window.history.replaceState({}, "", u.toString());
-    } else if (oauth === "success" || oauth === "error") {
-      if (oauth === "error" && oauthMessage && onError) {
-        const msg = oauthMessage === "exchange_failed" ? "Token exchange failed. Check PORTAL_OAUTH_CLIENT_SECRET and redirect_uri." : oauthMessage === "no_token" ? "No access token in response." : oauthMessage;
-        onError(msg);
-      }
-      load();
-      const u = new URL(window.location.href);
-      u.searchParams.delete("oauth");
-      u.searchParams.delete("message");
       window.history.replaceState({}, "", u.toString());
     }
   }, [load, onError]);

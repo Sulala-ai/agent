@@ -8,6 +8,7 @@ dashboard/dist/
 uploads/
 desktop/agent-app/
 desktop/release/
+scripts/
 
 # Internal docs (not for public repo)
 docs/private/

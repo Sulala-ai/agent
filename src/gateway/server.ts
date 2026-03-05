@@ -5,7 +5,7 @@ import { join } from 'path';
 import { randomBytes } from 'crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
 import cors from 'cors';
-import { config, getSulalaEnvPath, getPortalGatewayBase, getEffectivePortalApiKey } from '../config.js';
+import { config, getSulalaEnvPath, getPortalGatewayBase, getEffectivePortalApiKey, getSulalaEnvKey } from '../config.js';
 import { readOnboardEnvKeys, writeOnboardEnvKeys } from '../onboard-env.js';
 import {
   initDb,
@@ -69,6 +69,7 @@ const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 function rateLimitMiddleware(req: Request, res: Response, next: () => void): void {
   if (!config.rateLimitMax || config.rateLimitMax <= 0) return next();
   if (req.path === '/health') return next();
+  if (req.path === '/.well-known/oauth-protected-resource') return next();
   // Don't rate-limit read-only or bootstrap endpoints the dashboard calls often
   if (req.path.startsWith('/api/onboard')) return next();
   if (req.path === '/api/agent/pending-actions' && req.method === 'GET') return next();
@@ -76,8 +77,6 @@ function rateLimitMiddleware(req: Request, res: Response, next: () => void): voi
   if (req.path === '/api/integrations/connections' && req.method === 'GET') return next();
   if (req.path === '/api/integrations/connect' && req.method === 'POST') return next();
   if (req.path.startsWith('/api/integrations/connections/') && req.method === 'DELETE') return next();
-  if (req.path === '/api/oauth/connect-url' && req.method === 'GET') return next();
-  if (req.path === '/api/oauth/callback' && req.method === 'GET') return next();
   const ip = (req.ip || req.socket?.remoteAddress || 'unknown') as string;
   const now = Date.now();
   let entry = rateLimitMap.get(ip);
@@ -120,6 +119,7 @@ export function createGateway(appMount: Express | null = null): Express {
   if (config.gatewayApiKey) {
     app.use((req: Request, res: Response, next: () => void) => {
       if (req.path === '/health') return next();
+      if (req.path === '/.well-known/oauth-protected-resource') return next();
       if (req.path === '/onboard' || req.path.startsWith('/api/onboard') || req.path.startsWith('/api/ollama')) return next();
       const key = (req.headers['x-api-key'] as string) || (req.query.api_key as string);
       if (key === config.gatewayApiKey) return next();
@@ -195,6 +195,33 @@ export function createGateway(appMount: Express | null = null): Express {
 
   app.get('/health', (_req: Request, res: Response) => {
     res.json({ status: 'ok', service: 'sulala-gateway' });
+  });
+
+  /** MCP OAuth 2.1 (RFC 9728): protected resource metadata for ChatGPT Apps SDK. Served without auth so clients can discover. */
+  app.get('/.well-known/oauth-protected-resource', (_req: Request, res: Response) => {
+    const enabled = (getSulalaEnvKey('MCP_OAUTH_ENABLED') || '').toLowerCase();
+    if (enabled !== '1' && enabled !== 'true') {
+      res.status(404).json({ error: 'MCP OAuth not enabled' });
+      return;
+    }
+    const resourceUrl = (getSulalaEnvKey('MCP_OAUTH_RESOURCE_URL') || '').trim();
+    const authServer = (getSulalaEnvKey('MCP_OAUTH_AUTHORIZATION_SERVER') || '').trim();
+    if (!resourceUrl || !authServer) {
+      res.status(503).setHeader('Content-Type', 'application/json').json({
+        error: 'MCP OAuth not configured',
+        detail: 'Set MCP_OAUTH_RESOURCE_URL and MCP_OAUTH_AUTHORIZATION_SERVER (e.g. Auth0 tenant URL).',
+      });
+      return;
+    }
+    const scopesRaw = (getSulalaEnvKey('MCP_OAUTH_SCOPES_SUPPORTED') || '').trim();
+    const scopes_supported = scopesRaw ? scopesRaw.split(',').map((s) => s.trim()).filter(Boolean) : ['openid'];
+    const doc = {
+      resource: resourceUrl.replace(/\/$/, ''),
+      authorization_servers: [authServer.replace(/\/$/, '')],
+      scopes_supported,
+      resource_documentation: resourceUrl.replace(/\/$/, '') + '/onboard',
+    };
+    res.setHeader('Content-Type', 'application/json').json(doc);
   });
 
   /** Onboard: check if onboarding is complete (first-launch detection). */
@@ -624,106 +651,6 @@ export function createGateway(appMount: Express | null = null): Express {
     }
   });
 
-  /** GET /api/oauth/connect-url — Build Portal "Connect with Sulala" URL for dashboard. Requires PORTAL_GATEWAY_URL, PORTAL_OAUTH_CLIENT_ID; redirect_uri = this gateway base + /api/oauth/callback. Optional return_to encoded in state for callback redirect. */
-  app.get('/api/oauth/connect-url', (req: Request, res: Response) => {
-    try {
-      const portalGateway = getPortalGatewayBase();
-      const portalBase = portalGateway ? portalGateway.replace(/\/api\/gateway$/i, '') : '';
-      const clientId = (process.env.PORTAL_OAUTH_CLIENT_ID || '').trim();
-      if (!portalBase || !clientId) {
-        res.status(503).json({
-          error: 'OAuth not configured',
-          hint: 'Set PORTAL_GATEWAY_URL and PORTAL_OAUTH_CLIENT_ID (and PORTAL_OAUTH_CLIENT_SECRET for callback). Register redirect_uri in the Portal.',
-        });
-        return;
-      }
-      const proto = (req.headers['x-forwarded-proto'] as string) || (req.secure ? 'https' : 'http');
-      const host = (req.headers['x-forwarded-host'] as string) || req.headers.host || '';
-      const publicBase = (process.env.PUBLIC_URL || process.env.GATEWAY_PUBLIC_URL || '').trim() || `${proto}://${host}`;
-      const callbackUrl = `${publicBase.replace(/\/$/, '')}/api/oauth/callback`;
-      const return_to = (req.query.return_to as string)?.trim() || undefined;
-      const statePayload = JSON.stringify({ r: randomBytes(12).toString('base64url'), return_to });
-      const state = Buffer.from(statePayload, 'utf8').toString('base64url');
-      const url = `${portalBase}/connect?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(callbackUrl)}&state=${encodeURIComponent(state)}`;
-      res.json({ url });
-    } catch (e) {
-      log('gateway', 'error', (e as Error).message);
-      res.status(500).json({ error: (e as Error).message });
-    }
-  });
-
-  function parseOAuthReturnTo(req: Request): string | undefined {
-    try {
-      const stateRaw = (req.query.state as string) || '';
-      const statePayload = JSON.parse(Buffer.from(stateRaw, 'base64url').toString('utf8'));
-      if (statePayload && typeof statePayload.return_to === 'string' && statePayload.return_to.trim()) {
-        return statePayload.return_to.trim();
-      }
-    } catch {
-      /* state may be legacy random string */
-    }
-    return undefined;
-  }
-
-  /** GET /api/oauth/callback — Portal redirects here with code & state. Exchange for access token, save as PORTAL_API_KEY, redirect to dashboard. */
-  app.get('/api/oauth/callback', async (req: Request, res: Response) => {
-    const dashboardOrigin = (req.headers['x-forwarded-proto'] ? `${req.headers['x-forwarded-proto']}://${req.headers['x-forwarded-host']}` : null) || (req.headers.origin || `${req.protocol}://${req.get('host')}`);
-    const return_to = parseOAuthReturnTo(req);
-    const returnFragment = return_to ? `&return_to=${encodeURIComponent(return_to)}` : '';
-    try {
-      const code = (req.query.code as string) || '';
-      const portalGateway = getPortalGatewayBase();
-      const portalBase = portalGateway ? portalGateway.replace(/\/api\/gateway$/i, '') : '';
-      const clientId = (process.env.PORTAL_OAUTH_CLIENT_ID || '').trim();
-      const clientSecret = (process.env.PORTAL_OAUTH_CLIENT_SECRET || '').trim();
-      if (!code || !portalBase || !clientId || !clientSecret) {
-        res.redirect(302, `${dashboardOrigin || '/'}/?page=integrations&oauth=error&message=missing_config${returnFragment}`);
-        return;
-      }
-      const proto = (req.headers['x-forwarded-proto'] as string) || (req.secure ? 'https' : 'http');
-      const host = (req.headers['x-forwarded-host'] as string) || req.headers.host || '';
-      const publicBase = (process.env.PUBLIC_URL || process.env.GATEWAY_PUBLIC_URL || '').trim() || `${proto}://${host}`;
-      const redirectUri = `${publicBase.replace(/\/$/, '')}/api/oauth/callback`;
-      const tokenRes = await fetch(`${portalBase}/api/oauth/token`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          grant_type: 'authorization_code',
-          code,
-          client_id: clientId,
-          client_secret: clientSecret,
-          redirect_uri: redirectUri,
-        }),
-      });
-      const tokenText = await tokenRes.text();
-      if (!tokenRes.ok) {
-        log('gateway', 'error', `OAuth token exchange failed: ${tokenRes.status} ${tokenText}`);
-        res.redirect(302, `${dashboardOrigin || '/'}/?page=integrations&oauth=error&message=exchange_failed${returnFragment}`);
-        return;
-      }
-      let tokenData: { access_token?: string };
-      try {
-        tokenData = JSON.parse(tokenText);
-      } catch {
-        res.redirect(302, `${dashboardOrigin || '/'}/?page=integrations&oauth=error&message=invalid_response${returnFragment}`);
-        return;
-      }
-      const accessToken = tokenData.access_token?.trim();
-      if (!accessToken) {
-        res.redirect(302, `${dashboardOrigin || '/'}/?page=integrations&oauth=error&message=no_token${returnFragment}`);
-        return;
-      }
-      writeOnboardEnvKeys({ PORTAL_API_KEY: accessToken });
-      res.redirect(302, `${dashboardOrigin || '/'}/?page=integrations&oauth=success${returnFragment}`);
-    } catch (e) {
-      log('gateway', 'error', (e as Error).message);
-      const dashboardOrigin = (req.headers.origin || (req.headers['x-forwarded-proto'] && req.headers['x-forwarded-host'] ? `${req.headers['x-forwarded-proto']}://${req.headers['x-forwarded-host']}` : null) || `${req.protocol}://${req.get('host')}`);
-      const return_to = parseOAuthReturnTo(req);
-      const returnFragment = return_to ? `&return_to=${encodeURIComponent(return_to)}` : '';
-      res.redirect(302, `${dashboardOrigin || '/'}/?page=integrations&oauth=error&message=server_error${returnFragment}`);
-    }
-  });
-
   app.get('/api/config', (_req: Request, res: Response) => {
     try {
       const portalUrl = getPortalGatewayBase();
@@ -731,7 +658,10 @@ export function createGateway(appMount: Express | null = null): Express {
       const portalSet = !!(portalUrl && portalKey);
       const directSet = !!config.integrationsUrl?.trim();
       const integrationsMode = portalSet ? 'portal' : directSet ? 'direct' : null;
-      const portalOAuthClientId = (process.env.PORTAL_OAUTH_CLIENT_ID || '').trim();
+      const mcpOAuthEnabled = ((getSulalaEnvKey('MCP_OAUTH_ENABLED') || '').toLowerCase() === '1' || (getSulalaEnvKey('MCP_OAUTH_ENABLED') || '').toLowerCase() === 'true');
+      const mcpOAuthResourceUrl = (getSulalaEnvKey('MCP_OAUTH_RESOURCE_URL') || '').trim();
+      const mcpOAuthAuthServer = (getSulalaEnvKey('MCP_OAUTH_AUTHORIZATION_SERVER') || '').trim();
+      const mcpOAuthScopes = (getSulalaEnvKey('MCP_OAUTH_SCOPES_SUPPORTED') || '').trim();
       res.json({
         watchFolders: config.watchFolders || [],
         agentUsePi: config.agentUsePi,
@@ -741,8 +671,18 @@ export function createGateway(appMount: Express | null = null): Express {
         /** 'portal' = agent uses Portal for connections; 'direct' = agent uses INTEGRATIONS_URL; null = neither. */
         integrationsMode,
         portalGatewayUrl: portalUrl || config.portalGatewayUrl || null,
-        /** When set, dashboard can show "Connect with Sulala (OAuth)" and use /api/oauth/connect-url. */
-        portalOAuthConnectAvailable: !!(portalUrl && portalOAuthClientId),
+        /** ChatGPT Apps SDK / MCP OAuth 2.1: config for onboarding and settings. */
+        chatgptOAuth: {
+          enabled: mcpOAuthEnabled,
+          resourceUrl: mcpOAuthResourceUrl || null,
+          authorizationServer: mcpOAuthAuthServer || null,
+          scopesSupported: mcpOAuthScopes ? mcpOAuthScopes.split(',').map((s) => s.trim()).filter(Boolean) : [],
+          /** Redirect URIs to allowlist in your IdP (Auth0, Stytch, etc.). */
+          redirectUrisHint: [
+            'https://chatgpt.com/connector/oauth/{callback_id}',
+            'https://platform.openai.com/apps-manage/oauth',
+          ],
+        },
         aiProviders: [
           { id: 'openai', label: 'OpenAI', defaultModel: process.env.AI_OPENAI_DEFAULT_MODEL || 'gpt-4o-mini' },
           { id: 'openrouter', label: 'OpenRouter', defaultModel: process.env.AI_OPENROUTER_DEFAULT_MODEL || 'openai/gpt-4o-mini' },

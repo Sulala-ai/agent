@@ -11,10 +11,6 @@ export type PortalSettingsCardProps = {
   portalGatewayUrl?: string | null;
   onSaved?: () => void;
   onError?: (msg: string) => void;
-  /** When true, show "Connect with Sulala (OAuth)" at top, then "or", then API key. */
-  portalOAuthConnectAvailable?: boolean;
-  /** Called when user clicks OAuth button; card shows loading until it resolves or errors. */
-  onOAuthConnect?: () => Promise<void>;
 };
 
 const DEFAULT_PORTAL_GATEWAY_URL = import.meta.env.VITE_DEFAULT_PORTAL_GATEWAY_URL || "https://portal.sulala.ai/api/gateway";
@@ -24,15 +20,12 @@ export function PortalSettingsCard({
   portalGatewayUrl,
   onSaved,
   onError,
-  portalOAuthConnectAvailable = false,
-  onOAuthConnect,
 }: PortalSettingsCardProps) {
   const [envKeys, setEnvKeys] = useState<OnboardEnvKeys>({});
   const [portalUrl, setPortalUrl] = useState(portalGatewayUrl?.trim() || DEFAULT_PORTAL_GATEWAY_URL);
   const [apiKey, setApiKey] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [oauthStarting, setOauthStarting] = useState(false);
 
   useEffect(() => {
     setPortalUrl(portalGatewayUrl?.trim() || DEFAULT_PORTAL_GATEWAY_URL);
@@ -76,19 +69,6 @@ export function PortalSettingsCard({
 
   const keyPlaceholder = envKeys.PORTAL_API_KEY === "set" ? "(already set)" : "sk_live_...";
   const saveDisabled = saving || !portalUrl.trim() || (required && !apiKey.trim());
-  const showOAuth = portalOAuthConnectAvailable && onOAuthConnect;
-
-  const handleOAuthClick = async () => {
-    setOauthStarting(true);
-    onError?.("");
-    try {
-      await onOAuthConnect?.();
-    } catch (e) {
-      onError?.((e as Error).message);
-    } finally {
-      setOauthStarting(false);
-    }
-  };
 
   return (
     <div className="border-border bg-muted/30 flex flex-col gap-3 rounded-lg border p-4 text-sm">
@@ -118,23 +98,6 @@ export function PortalSettingsCard({
               e.g. http://localhost:3004/api/gateway for local Portal, or https://portal.sulala.ai/api/gateway
             </p>
           </div>
-          {showOAuth && (
-            <>
-              <Button
-                variant="default"
-                size="sm"
-                onClick={handleOAuthClick}
-                disabled={oauthStarting}
-                className="w-fit"
-              >
-                {oauthStarting ? "Opening…" : "Connect with Sulala (OAuth)"}
-              </Button>
-              <p className="text-muted-foreground text-xs">
-                Opens in a new tab. After signing in you’ll be redirected back; refresh this page if the key doesn’t appear.
-              </p>
-              <p className="text-muted-foreground text-xs font-medium">or</p>
-            </>
-          )}
           <div className="space-y-1">
             <Label htmlFor="portal-api-key" className="text-xs">
               Portal API Key

@@ -11,7 +11,7 @@ import { PaymentPage } from "./PaymentPage";
 import { MemoryPage } from "./MemoryPage";
 import { PortalSettingsCard } from "@/features/integrations/components/PortalSettingsCard";
 import { StorePublishSettingsCard } from "@/features/integrations/components/StorePublishSettingsCard";
-import { fetchOAuthConnectUrl, getHubBaseUrl } from "@/lib/api";
+import { getHubBaseUrl } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { WsEvent } from "@/hooks/useWebSocket";
 import type { Config, FileState, Log, Task } from "@/lib/api";
@@ -132,14 +132,6 @@ export function SettingsPage(props: SettingsPageProps) {
 
 function PortalTab({ config, onError }: { config: Config | null; onError?: (msg: string) => void }) {
   const portalGatewayUrl = config?.portalGatewayUrl ?? null;
-  const portalOAuthConnectAvailable = config?.portalOAuthConnectAvailable === true;
-
-  const handleOAuthConnect = async () => {
-    const { url } = await fetchOAuthConnectUrl();
-    window.open(url, "_blank", "noopener,noreferrer");
-    // In Electron the URL opens in system browser and window.open returns null; that's expected.
-  };
-
   const storeBaseUrl = getHubBaseUrl();
 
   return (
@@ -147,8 +139,6 @@ function PortalTab({ config, onError }: { config: Config | null; onError?: (msg:
       <PortalSettingsCard
         portalGatewayUrl={portalGatewayUrl}
         onError={onError}
-        portalOAuthConnectAvailable={portalOAuthConnectAvailable}
-        onOAuthConnect={portalOAuthConnectAvailable ? handleOAuthConnect : undefined}
       />
       <StorePublishSettingsCard
         storeBaseUrl={storeBaseUrl}

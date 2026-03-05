@@ -18,6 +18,11 @@ export const ONBOARD_ENV_WHITELIST = [
   'STORE_PUBLISH_API_KEY',
   'ALLOWED_BINARIES',
   'STRIPE_SECRET_KEY',
+  // ChatGPT Apps SDK / MCP OAuth 2.1 (RFC 9728 protected resource metadata)
+  'MCP_OAUTH_ENABLED',
+  'MCP_OAUTH_RESOURCE_URL',
+  'MCP_OAUTH_AUTHORIZATION_SERVER',
+  'MCP_OAUTH_SCOPES_SUPPORTED',
 ] as const;
 
 export type OnboardEnvKey = (typeof ONBOARD_ENV_WHITELIST)[number];
