@@ -26,7 +26,7 @@ export function startSkillsWatcher(
   watcher = chokidar.watch(dirs, {
     ignoreInitial: true,
     depth: 2,
-    ignored: (p) => !/\.(md|txt)$/.test(p),
+    ignored: (p) => !/\.(md|txt|yaml|yml)$/.test(p),
   });
   watcher.on('add', fire).on('change', fire).on('unlink', fire);
   return watcher;

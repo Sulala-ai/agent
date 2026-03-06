@@ -181,10 +181,15 @@ export async function completeStream(
   const envKeyName = provider === 'openai' ? 'OPENAI_API_KEY' : provider === 'openrouter' ? 'OPENROUTER_API_KEY' : '';
   const rawKey = envKeyName ? getSulalaEnvKey(envKeyName) : undefined;
   const apiKey = typeof rawKey === 'string' ? rawKey.trim() : '';
-  if (!streamFactory || !streamDefaultModel || !apiKey || !('_create' in streamFactory)) {
+  if (!streamFactory || !streamDefaultModel || !('_create' in streamFactory)) {
     const result = await complete({ ...options, provider, messages, model, max_tokens, tools, signal: options.signal });
     onChunk({ type: 'finish', content: result.content ?? '', tool_calls: result.tool_calls, usage: result.usage });
     return { content: result.content ?? '', tool_calls: result.tool_calls, usage: result.usage };
+  }
+  if (!apiKey) {
+    throw new Error(
+      `${envKeyName} not set. Add it in Settings or ~/.sulala/.env and try again.`
+    );
   }
 
   // Tool calling: use non-streaming so tool_calls.arguments are complete JSON (streaming can truncate and cause JSON.parse errors).
@@ -231,6 +236,10 @@ export async function completeStream(
     }>;
   } catch (streamErr) {
     const status = (streamErr as { status?: number }).status;
+    if (status === 401) {
+      const keyName = provider === 'openai' ? 'OPENAI_API_KEY' : provider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'API key';
+      throw new Error(`${keyName} invalid or missing. Check Settings or ~/.sulala/.env and try again.`);
+    }
     const useCompletionsFallback =
       provider === 'openrouter' &&
       (isNotChatModelError(streamErr) || status === 404 || (status === 400 && isNotChatModelError(streamErr)));
@@ -432,19 +441,27 @@ async function registerAllProviders(): Promise<void> {
               function: { name: t.name, description: t.description, parameters: t.parameters ?? {} },
             }));
           }
-          const res = await (client.chat.completions.create as (opts: unknown, opts2?: { signal?: AbortSignal }) => Promise<unknown>)(createOpts, signal ? { signal } : undefined) as { choices?: { message?: { content?: string; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> } }[]; usage?: Record<string, number> };
-          const choice = res.choices?.[0];
-          const msg = choice?.message;
-          const tool_calls = msg?.tool_calls?.map((tc) => ({
-            id: tc.id,
-            name: tc.function?.name ?? '',
-            arguments: tc.function?.arguments ?? '',
-          }));
-          return {
-            content: msg?.content ?? '',
-            usage: res.usage ?? {},
-            ...(tool_calls?.length ? { tool_calls } : {}),
-          };
+          try {
+            const res = await (client.chat.completions.create as (opts: unknown, opts2?: { signal?: AbortSignal }) => Promise<unknown>)(createOpts, signal ? { signal } : undefined) as { choices?: { message?: { content?: string; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> } }[]; usage?: Record<string, number> };
+            const choice = res.choices?.[0];
+            const msg = choice?.message;
+            const tool_calls = msg?.tool_calls?.map((tc) => ({
+              id: tc.id,
+              name: tc.function?.name ?? '',
+              arguments: tc.function?.arguments ?? '',
+            }));
+            return {
+              content: msg?.content ?? '',
+              usage: res.usage ?? {},
+              ...(tool_calls?.length ? { tool_calls } : {}),
+            };
+          } catch (err) {
+            const status = (err as { status?: number }).status;
+            if (status === 401) {
+              throw new Error('OPENAI_API_KEY invalid or missing. Check Settings or ~/.sulala/.env and try again.');
+            }
+            throw err;
+          }
         },
       });
     }
@@ -503,6 +520,9 @@ async function registerAllProviders(): Promise<void> {
           } catch (chatErr) {
             const errAny = chatErr as { status?: number; response?: { status?: number } };
             const status = errAny?.status ?? errAny?.response?.status;
+            if (status === 401) {
+              throw new Error('OPENROUTER_API_KEY invalid or missing. Check Settings or ~/.sulala/.env and try again.');
+            }
             const msg = chatErr instanceof Error ? chatErr.message : String(chatErr);
             const isCompletionsModel =
               isNotChatModelError(chatErr) ||

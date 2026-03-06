@@ -15,9 +15,12 @@ import { getSkillConfigEnv, getSkillToolPolicy } from './skills-config.js';
 import { redactSecretKeysInSummary } from '../redact.js';
 import { runAgentTurn } from './loop.js';
 import { getPluginTools, type PluginToolContext } from '../plugins/index.js';
-import type { ToolDef, ToolExecuteContext } from '../types.js';
+import type { Config, ToolDef, ToolExecuteContext } from '../types.js';
 
 const registry = new Map<string, ToolDef>();
+
+/** Tool names registered from skills (tools.yaml); cleared and repopulated on skills_changed. */
+let lastSpecToolNames: string[] = [];
 
 /** Current agent run depth (0 = top-level). Used to block nested run_agent. */
 let agentRunDepth = 0;
@@ -32,6 +35,17 @@ export function setAgentRunDepth(d: number): void {
 
 export function registerTool(tool: ToolDef): void {
   registry.set(tool.name, tool);
+}
+
+/** Remove tools by name (used when refreshing spec tools on skills_changed). */
+export function unregisterTools(names: string[]): void {
+  for (const n of names) registry.delete(n);
+}
+
+/** Re-load spec tools from skill dirs (~/.sulala/workspace/skills, context, etc.). Call on skills_changed so new skills are recognized without restart. */
+export function refreshSpecTools(cfg: Config): void {
+  unregisterTools(lastSpecToolNames);
+  lastSpecToolNames = registerSpecTools((t) => registerTool(t), cfg);
 }
 
 export function getTool(name: string): ToolDef | undefined {
@@ -232,13 +246,14 @@ export function registerBuiltInTools(enqueueTask: (taskId: string) => void): voi
             return s;
           });
         }
-        // Resolve portal gateway URLs for curl: .../connections/conn_xxx/use and .../connections/conn_xxx/bsky-request
+        // Resolve portal gateway URLs for curl: .../connections/conn_xxx/use, .../bsky-request, .../youtube-upload
         if (binary === 'curl' && portalGatewayBase && argsList.length > 0) {
           const argsStr = argsList.join(' ');
           const useMatch = argsStr.match(/\/connections\/(conn_[a-zA-Z0-9_]+)\/use/);
           const bskyMatch = argsStr.match(/\/connections\/(conn_[a-zA-Z0-9_]+)\/bsky-request/);
-          const pathMatch = useMatch || bskyMatch;
-          const pathSuffix = useMatch ? '/use' : bskyMatch ? '/bsky-request' : '';
+          const ytUploadMatch = argsStr.match(/\/connections\/(conn_[a-zA-Z0-9_]+)\/youtube-upload/);
+          const pathMatch = useMatch || bskyMatch || ytUploadMatch;
+          const pathSuffix = useMatch ? '/use' : bskyMatch ? '/bsky-request' : ytUploadMatch ? '/youtube-upload' : '';
           if (pathMatch) {
             const path = `/connections/${pathMatch[1]}${pathSuffix}`;
             const resolved = portalGatewayBase.replace(/\/$/, '') + path;
@@ -246,7 +261,7 @@ export function registerBuiltInTools(enqueueTask: (taskId: string) => void): voi
             const urlIdx =
               postIdx >= 0
                 ? postIdx + 1
-                : argsList.findIndex((a) => a.includes('/connections/') && (a.includes('/use') || a.includes('/bsky-request')));
+                : argsList.findIndex((a) => a.includes('/connections/') && (a.includes('/use') || a.includes('/bsky-request') || a.includes('/youtube-upload')));
             if (urlIdx >= 0 && urlIdx < argsList.length) {
               const urlArg = argsList[urlIdx];
               const isBroken =
@@ -596,14 +611,14 @@ export function registerBuiltInTools(enqueueTask: (taskId: string) => void): voi
   registerTool({
     name: 'list_integrations_connections',
     description:
-      'OAuth integrations only (calendar, gmail, drive, docs, sheets, slides, github, slack, notion, linear, zoom). Returns connection_id and provider. Do NOT use for Stripe or Discord—for Stripe customers use stripe_list_customers; for Discord use discord_list_guilds / discord_send_message. Requires PORTAL_GATEWAY_URL + PORTAL_API_KEY or INTEGRATIONS_URL.',
+      'OAuth integrations only (calendar, gmail, drive, docs, sheets, slides, github, slack, notion, linear, zoom, trello, twitter, microsoft, zendesk, youtube). Returns connection_id and provider. Do NOT use for Stripe or Discord—for Stripe customers use stripe_list_customers; for Discord use discord_list_guilds / discord_send_message. Requires PORTAL_GATEWAY_URL + PORTAL_API_KEY or INTEGRATIONS_URL.',
     profile: 'full',
     parameters: {
       type: 'object',
       properties: {
         provider: {
           type: 'string',
-          description: 'Exact provider to filter: "calendar", "gmail", "drive", "docs", "sheets", "slides", "github", "slack", "notion", "linear", "zoom", etc. Optional; omit to list all.',
+          description: 'Exact provider to filter: "calendar", "gmail", "drive", "docs", "sheets", "slides", "github", "slack", "notion", "linear", "zoom", "trello", "twitter", "microsoft", "zendesk", etc. Optional; omit to list all.',
         },
       },
       required: [],
@@ -728,7 +743,7 @@ export function registerBuiltInTools(enqueueTask: (taskId: string) => void): voi
   });
 
   // Register YAML spec tools; first-wins so ~/.sulala/workspace/skills (e.g. stripe) overrides ./context
-  registerSpecTools(
+  lastSpecToolNames = registerSpecTools(
     (tool) => {
       if (!registry.has(tool.name)) registerTool(tool);
     },

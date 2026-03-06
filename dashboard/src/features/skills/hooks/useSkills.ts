@@ -11,9 +11,8 @@ import {
   fetchAgentSkillUninstall,
   fetchAgentSkillPublish,
   fetchAgentSkillsPublishStatus,
-  fetchAgentSkillsTemplates,
 } from "@/lib/api";
-import type { AgentSkill, AgentRegistrySkill, AgentSkillsConfig, AgentSkillTemplate } from "@/lib/api";
+import type { AgentSkill, AgentRegistrySkill, AgentSkillsConfig } from "@/lib/api";
 
 export function useSkills(onError: (msg: string) => void) {
   const [skills, setSkills] = useState<AgentSkill[]>([]);
@@ -30,9 +29,7 @@ export function useSkills(onError: (msg: string) => void) {
   const [skillsConfig, setSkillsConfig] = useState<AgentSkillsConfig | null>(null);
   const [skillsConfigPath, setSkillsConfigPath] = useState<string>("~/.sulala/config.json");
   const [skillsUpdates, setSkillsUpdates] = useState<Set<string>>(new Set());
-  const [skillsTab, setSkillsTab] = useState<"installed" | "myskills" | "hub" | "templates">("installed");
-  const [templates, setTemplates] = useState<AgentSkillTemplate[]>([]);
-  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [skillsTab, setSkillsTab] = useState<"installed" | "myskills" | "hub">("installed");
   const [visibleSecretKeys, setVisibleSecretKeys] = useState<Record<string, boolean>>({});
   const [publishStatusMap, setPublishStatusMap] = useState<Record<string, "pending" | "approved">>({});
   const loadSkills = () => {
@@ -63,11 +60,6 @@ export function useSkills(onError: (msg: string) => void) {
       setRegistryLoading(false);
       setSystemRegistryLoading(false);
     });
-    setTemplatesLoading(true);
-    fetchAgentSkillsTemplates()
-      .then((r) => setTemplates(r.templates || []))
-      .catch(() => setTemplates([]))
-      .finally(() => setTemplatesLoading(false));
     fetchAgentSkillsPublishStatus()
       .then((r) => {
         const map: Record<string, "pending" | "approved"> = {};
@@ -203,26 +195,6 @@ export function useSkills(onError: (msg: string) => void) {
     });
   };
 
-  const handleUseTemplate = async (
-    slug: string,
-    formValues: Record<string, string>
-  ): Promise<void> => {
-    setInstallingSlug(slug);
-    try {
-      await fetchAgentSkillInstall(slug, "workspace");
-      const r = await fetchAgentSkillsConfig();
-      const config = r.skills ?? { entries: {} };
-      const entries = { ...config.entries, [slug]: { enabled: true, ...formValues } };
-      await fetchAgentSkillsConfigSave({ ...config, entries });
-      setSkillsConfig({ ...config, entries });
-      loadSkills();
-    } catch (e) {
-      onError(e instanceof Error ? e.message : "Template setup failed");
-    } finally {
-      setInstallingSlug(null);
-    }
-  };
-
   return {
     skills,
     skillsLoading,
@@ -242,8 +214,6 @@ export function useSkills(onError: (msg: string) => void) {
     skillsUpdates,
     skillsTab,
     setSkillsTab,
-    templates,
-    templatesLoading,
     visibleSecretKeys,
     setVisibleSecretKeys,
     loadSkills,
@@ -254,7 +224,6 @@ export function useSkills(onError: (msg: string) => void) {
     handleInstallSkill,
     handleUninstallSkill,
     handlePublishSkill,
-    handleUseTemplate,
     handleUpdateSkills,
     refreshRegistry,
     validateSkillEnvConfig,

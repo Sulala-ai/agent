@@ -1,11 +1,11 @@
 import express, { type Express, type Request, type Response } from 'express';
 import { createServer } from 'http';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import { join, resolve, sep } from 'path';
 import { randomBytes } from 'crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
 import cors from 'cors';
-import { config, getSulalaEnvPath, getPortalGatewayBase, getEffectivePortalApiKey } from '../config.js';
+import { config, getSulalaEnvPath, getPortalGatewayBase, getEffectivePortalApiKey, getSulalaEnvKey } from '../config.js';
 import { readOnboardEnvKeys, writeOnboardEnvKeys } from '../onboard-env.js';
 import {
   initDb,
@@ -58,6 +58,8 @@ import {
 import { isOllamaReachable, startOllamaServeForApi, runOllamaInstall, setPullProgressCallback, pullOllamaModel } from '../ollama-setup.js';
 import { getSystemCapabilities } from '../system-capabilities.js';
 import { getPackageRoot } from '../onboard.js';
+import { getMcpConfigForDisplay, writeMcpServersConfig, getMcpServersConfig, type McpServerConfig } from '../mcp/config.js';
+import { refreshMcpTools } from '../mcp/client.js';
 import type { AppLocals } from '../types.js';
 
 const projectRoot = getPackageRoot();
@@ -69,6 +71,7 @@ const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 function rateLimitMiddleware(req: Request, res: Response, next: () => void): void {
   if (!config.rateLimitMax || config.rateLimitMax <= 0) return next();
   if (req.path === '/health') return next();
+  if (req.path === '/.well-known/oauth-protected-resource') return next();
   // Don't rate-limit read-only or bootstrap endpoints the dashboard calls often
   if (req.path.startsWith('/api/onboard')) return next();
   if (req.path === '/api/agent/pending-actions' && req.method === 'GET') return next();
@@ -107,7 +110,11 @@ function getStorePublishBaseUrl(): string | null {
 export function createGateway(appMount: Express | null = null): Express {
   const app = appMount || express();
   app.use(cors());
-  app.use(express.json());
+  // Skip default JSON body parser for /api/upload so the route can use a 260mb limit for video uploads
+  app.use((req: Request, res: Response, next: () => void) => {
+    if (req.path === '/api/upload' && req.method === 'POST') return next();
+    return express.json()(req, res, next);
+  });
   app.use(rateLimitMiddleware);
 
   try {
@@ -120,6 +127,7 @@ export function createGateway(appMount: Express | null = null): Express {
   if (config.gatewayApiKey) {
     app.use((req: Request, res: Response, next: () => void) => {
       if (req.path === '/health') return next();
+      if (req.path === '/.well-known/oauth-protected-resource') return next();
       if (req.path === '/onboard' || req.path.startsWith('/api/onboard') || req.path.startsWith('/api/ollama')) return next();
       const key = (req.headers['x-api-key'] as string) || (req.query.api_key as string);
       if (key === config.gatewayApiKey) return next();
@@ -195,6 +203,33 @@ export function createGateway(appMount: Express | null = null): Express {
 
   app.get('/health', (_req: Request, res: Response) => {
     res.json({ status: 'ok', service: 'sulala-gateway' });
+  });
+
+  /** MCP OAuth 2.1 (RFC 9728): protected resource metadata for ChatGPT Apps SDK. Served without auth so clients can discover. */
+  app.get('/.well-known/oauth-protected-resource', (_req: Request, res: Response) => {
+    const enabled = (getSulalaEnvKey('MCP_OAUTH_ENABLED') || '').toLowerCase();
+    if (enabled !== '1' && enabled !== 'true') {
+      res.status(404).json({ error: 'MCP OAuth not enabled' });
+      return;
+    }
+    const resourceUrl = (getSulalaEnvKey('MCP_OAUTH_RESOURCE_URL') || '').trim();
+    const authServer = (getSulalaEnvKey('MCP_OAUTH_AUTHORIZATION_SERVER') || '').trim();
+    if (!resourceUrl || !authServer) {
+      res.status(503).setHeader('Content-Type', 'application/json').json({
+        error: 'MCP OAuth not configured',
+        detail: 'Set MCP_OAUTH_RESOURCE_URL and MCP_OAUTH_AUTHORIZATION_SERVER (e.g. Auth0 tenant URL).',
+      });
+      return;
+    }
+    const scopesRaw = (getSulalaEnvKey('MCP_OAUTH_SCOPES_SUPPORTED') || '').trim();
+    const scopes_supported = scopesRaw ? scopesRaw.split(',').map((s) => s.trim()).filter(Boolean) : ['openid'];
+    const doc = {
+      resource: resourceUrl.replace(/\/$/, ''),
+      authorization_servers: [authServer.replace(/\/$/, '')],
+      scopes_supported,
+      resource_documentation: resourceUrl.replace(/\/$/, '') + '/onboard',
+    };
+    res.setHeader('Content-Type', 'application/json').json(doc);
   });
 
   /** Onboard: check if onboarding is complete (first-launch detection). */
@@ -586,6 +621,57 @@ export function createGateway(appMount: Express | null = null): Express {
     }
   });
 
+  /** GET /api/mcp/config — MCP servers config for dashboard (env values redacted). */
+  app.get('/api/mcp/config', (_req: Request, res: Response) => {
+    try {
+      res.json(getMcpConfigForDisplay());
+    } catch (e) {
+      log('gateway', 'error', (e as Error).message);
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
+  /** PUT /api/mcp/config — Save MCP servers (dashboard). Body: { servers }. Env values "***" are preserved from existing config. */
+  app.put('/api/mcp/config', async (req: Request, res: Response) => {
+    try {
+      const body = req.body as { servers?: unknown[] };
+      if (!body || !Array.isArray(body.servers)) {
+        res.status(400).json({ error: 'Body must include servers array' });
+        return;
+      }
+      const current = getMcpServersConfig();
+      const currentByName = new Map(current.map((s) => [s.name, s]));
+      const merged: McpServerConfig[] = body.servers.map((raw) => {
+        const o = raw as Record<string, unknown>;
+        const name = typeof o.name === 'string' ? o.name.trim() : '';
+        const command = typeof o.command === 'string' ? o.command.trim() : '';
+        if (!name || !command) return null;
+        const args = Array.isArray(o.args) ? (o.args as unknown[]).map((a) => String(a)) : undefined;
+        const envRaw = o.env && typeof o.env === 'object' && !Array.isArray(o.env) ? (o.env as Record<string, unknown>) : undefined;
+        const existing = currentByName.get(name);
+        const env: Record<string, string> = {};
+        if (envRaw) {
+          for (const [k, v] of Object.entries(envRaw)) {
+            if (typeof k !== 'string') continue;
+            const val = typeof v === 'string' ? v : v != null ? String(v) : '';
+            if (val === '***' && existing?.env?.[k] != null) env[k] = existing.env[k];
+            else if (val !== '***') env[k] = val;
+          }
+        } else if (existing?.env) Object.assign(env, existing.env);
+        const entry: McpServerConfig = { name, command };
+        if (args?.length) entry.args = args;
+        if (Object.keys(env).length) entry.env = env;
+        return entry;
+      }).filter((c): c is McpServerConfig => c !== null);
+      writeMcpServersConfig(merged);
+      await refreshMcpTools();
+      res.json(getMcpConfigForDisplay());
+    } catch (e) {
+      log('gateway', 'error', (e as Error).message);
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
   /** DELETE /api/integrations/connections/:id — When Portal configured, disconnect via Portal. */
   app.delete('/api/integrations/connections/:id', async (req: Request, res: Response) => {
     try {
@@ -732,6 +818,10 @@ export function createGateway(appMount: Express | null = null): Express {
       const directSet = !!config.integrationsUrl?.trim();
       const integrationsMode = portalSet ? 'portal' : directSet ? 'direct' : null;
       const portalOAuthClientId = (process.env.PORTAL_OAUTH_CLIENT_ID || '').trim();
+      const mcpOAuthEnabled = ((getSulalaEnvKey('MCP_OAUTH_ENABLED') || '').toLowerCase() === '1' || (getSulalaEnvKey('MCP_OAUTH_ENABLED') || '').toLowerCase() === 'true');
+      const mcpOAuthResourceUrl = (getSulalaEnvKey('MCP_OAUTH_RESOURCE_URL') || '').trim();
+      const mcpOAuthAuthServer = (getSulalaEnvKey('MCP_OAUTH_AUTHORIZATION_SERVER') || '').trim();
+      const mcpOAuthScopes = (getSulalaEnvKey('MCP_OAUTH_SCOPES_SUPPORTED') || '').trim();
       res.json({
         watchFolders: config.watchFolders || [],
         agentUsePi: config.agentUsePi,
@@ -743,6 +833,18 @@ export function createGateway(appMount: Express | null = null): Express {
         portalGatewayUrl: portalUrl || config.portalGatewayUrl || null,
         /** When set, dashboard can show "Connect with Sulala (OAuth)" and use /api/oauth/connect-url. */
         portalOAuthConnectAvailable: !!(portalUrl && portalOAuthClientId),
+        /** ChatGPT Apps SDK / MCP OAuth 2.1: config for onboarding and settings. */
+        chatgptOAuth: {
+          enabled: mcpOAuthEnabled,
+          resourceUrl: mcpOAuthResourceUrl || null,
+          authorizationServer: mcpOAuthAuthServer || null,
+          scopesSupported: mcpOAuthScopes ? mcpOAuthScopes.split(',').map((s) => s.trim()).filter(Boolean) : [],
+          /** Redirect URIs to allowlist in your IdP (Auth0, Stytch, etc.). */
+          redirectUrisHint: [
+            'https://chatgpt.com/connector/oauth/{callback_id}',
+            'https://platform.openai.com/apps-manage/oauth',
+          ],
+        },
         aiProviders: [
           { id: 'openai', label: 'OpenAI', defaultModel: process.env.AI_OPENAI_DEFAULT_MODEL || 'gpt-4o-mini' },
           { id: 'openrouter', label: 'OpenRouter', defaultModel: process.env.AI_OPENROUTER_DEFAULT_MODEL || 'openai/gpt-4o-mini' },
@@ -1350,7 +1452,7 @@ export function createGateway(appMount: Express | null = null): Express {
     const { message, system_prompt, provider, model, max_tokens, timeout_ms, use_pi, required_integrations, attachment_urls } = req.body || {};
     const urls = Array.isArray(attachment_urls) ? (attachment_urls as string[]).filter((u) => typeof u === 'string' && u.trim()) : [];
     const userMessageText = typeof message === 'string' ? message : '';
-    const fullUserMessage = urls.length > 0 ? `${userMessageText}\n\n[Attached media (use these URLs when posting images, e.g. Facebook photo post): ${urls.join(', ')}]` : userMessageText;
+    const fullUserMessage = urls.length > 0 ? `${userMessageText}\n\n[Attached media — use these URLs when posting images (e.g. Facebook) or when uploading video to YouTube (pass as video_url to youtube_upload): ${urls.join(', ')}]` : userMessageText;
     const required = Array.isArray(required_integrations)
       ? (required_integrations as string[]).filter((k) => typeof k === 'string' && k.trim())
       : [];
@@ -1458,7 +1560,7 @@ export function createGateway(appMount: Express | null = null): Express {
     const isContinue = continueAfterApproval === true || continueAfterApproval === 'true';
     const streamUrls = Array.isArray(streamAttachmentUrls) ? (streamAttachmentUrls as string[]).filter((u) => typeof u === 'string' && u.trim()) : [];
     const streamMsg = typeof message === 'string' ? message : '';
-    const streamFullMessage = streamUrls.length > 0 ? `${streamMsg}\n\n[Attached media (use these URLs when posting images, e.g. Facebook photo post): ${streamUrls.join(', ')}]` : streamMsg;
+    const streamFullMessage = streamUrls.length > 0 ? `${streamMsg}\n\n[Attached media — use these URLs when posting images (e.g. Facebook) or when uploading video to YouTube (pass as video_url to youtube_upload): ${streamUrls.join(', ')}]` : streamMsg;
     const userMessage = isContinue ? null : (streamFullMessage || null);
 
     try {
@@ -1811,12 +1913,13 @@ export function createGateway(appMount: Express | null = null): Express {
     }
   });
 
-  /** Chat attachments: upload image/file, get a URL the agent can use (e.g. for Facebook photo posts). */
+  /** Chat attachments: upload image/video, get a URL the agent can use (e.g. Facebook photo posts, YouTube video upload). */
   const uploadsDir = join(projectRoot, 'uploads');
-  const ALLOWED_EXT = /\.(jpg|jpeg|png|gif|webp)$/i;
+  const ALLOWED_EXT = /\.(jpg|jpeg|png|gif|webp|mp4|webm|mov|m4v|avi)$/i;
+  const UPLOAD_MAX_BYTES = 256 * 1024 * 1024; // 256 MB (matches YouTube upload limit)
   app.post(
     '/api/upload',
-    express.json({ limit: '10mb' }),
+    express.json({ limit: '260mb' }),
     (req: Request, res: Response) => {
       try {
         const { filename, data } = req.body || {};
@@ -1831,8 +1934,8 @@ export function createGateway(appMount: Express | null = null): Express {
         if (!existsSync(uploadsDir)) mkdirSync(uploadsDir, { recursive: true });
         const path = join(uploadsDir, name);
         const buf = Buffer.from(data, 'base64');
-        if (buf.length > 8 * 1024 * 1024) {
-          res.status(400).json({ error: 'File too large (max 8MB)' });
+        if (buf.length > UPLOAD_MAX_BYTES) {
+          res.status(400).json({ error: `File too large (max ${UPLOAD_MAX_BYTES / (1024 * 1024)} MB)` });
           return;
         }
         writeFileSync(path, buf);
@@ -1848,7 +1951,7 @@ export function createGateway(appMount: Express | null = null): Express {
   );
   app.get('/api/uploads/:name', (req: Request, res: Response) => {
     const name = Array.isArray(req.params.name) ? req.params.name[0] : req.params.name;
-    if (!name || !/^[a-f0-9]{16}\.(jpg|jpeg|png|gif|webp)$/i.test(name)) {
+    if (!name || !/^[a-f0-9]{16}\.(jpg|jpeg|png|gif|webp|mp4|webm|mov|m4v|avi)$/i.test(name)) {
       res.status(400).json({ error: 'Invalid upload name' });
       return;
     }
@@ -1860,6 +1963,217 @@ export function createGateway(appMount: Express | null = null): Express {
     res.sendFile(path, { maxAge: 86400 * 7 }, (err) => {
       if (err) res.status(500).json({ error: (err as Error).message });
     });
+  });
+
+  /** General media upload: one endpoint for all destinations (youtube, drive, etc.). Hub provides auth only; file is resolved locally and uploaded from gateway. */
+  const MEDIA_UPLOAD_MAX_BYTES = 256 * 1024 * 1024;
+  const UPLOADS_NAME_REGEX = /^[a-f0-9]{16}\.(jpg|jpeg|png|gif|webp|mp4|webm|mov|m4v|avi)$/i;
+  const allowedDirsForPath = (): string[] => {
+    const dirs = [resolve(uploadsDir)];
+    if (config.agentWorkspaceRoot) dirs.push(resolve(process.cwd(), config.agentWorkspaceRoot));
+    for (const w of config.watchFolders || []) {
+      const p = resolve(w);
+      if (p && !dirs.includes(p)) dirs.push(p);
+    }
+    return dirs;
+  };
+  const isPathAllowed = (filePath: string): boolean => {
+    const abs = resolve(filePath);
+    for (const dir of allowedDirsForPath()) {
+      const d = resolve(dir);
+      if (abs === d || abs.startsWith(d + sep)) return true;
+    }
+    return false;
+  };
+  type TokenResult =
+    | { ok: true; accessToken: string }
+    | { ok: false; status: number; error: string };
+  const getConnectionToken = async (connectionId: string): Promise<TokenResult> => {
+    const portalBase = getPortalGatewayBase();
+    const portalKey = getEffectivePortalApiKey();
+    const integrationsBase = config.integrationsUrl?.replace(/\/$/, '');
+    const integrationsSecret = (process.env.INTEGRATIONS_API_SECRET || '').trim();
+    const useUrl =
+      integrationsBase && integrationsSecret
+        ? `${integrationsBase}/connections/${encodeURIComponent(connectionId)}/use`
+        : portalBase && portalKey
+          ? `${portalBase.replace(/\/$/, '')}/connections/${encodeURIComponent(connectionId)}/use`
+          : null;
+    if (!useUrl) return { ok: false, status: 503, error: 'Set PORTAL_GATEWAY_URL and PORTAL_API_KEY (or INTEGRATIONS_URL and INTEGRATIONS_API_SECRET).' };
+    const useRes = await fetch(useUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(integrationsBase && integrationsSecret
+          ? { Authorization: `Bearer ${integrationsSecret}`, 'X-Integrations-Api-Secret': integrationsSecret }
+          : { Authorization: `Bearer ${portalKey}` }),
+      },
+    });
+    const useText = await useRes.text();
+    if (!useRes.ok) {
+      let errMsg = useText || 'Failed to get token';
+      try {
+        const parsed = JSON.parse(useText) as { error?: string };
+        if (typeof parsed?.error === 'string') errMsg = parsed.error;
+      } catch {
+        // keep errMsg as useText
+      }
+      if (useRes.status === 404) {
+        errMsg += ' Ensure the integration is connected in the Portal for the same account that owns the API key (Settings → API Keys), and use the connection_id from list_integrations_connections.';
+      }
+      return { ok: false, status: useRes.status, error: errMsg };
+    }
+    let useJson: { accessToken?: string };
+    try {
+      useJson = JSON.parse(useText) as { accessToken?: string };
+    } catch {
+      return { ok: false, status: 502, error: 'Invalid token response' };
+    }
+    if (!useJson?.accessToken || typeof useJson.accessToken !== 'string') {
+      return { ok: false, status: 502, error: 'Token response missing accessToken' };
+    }
+    return { ok: true, accessToken: useJson.accessToken };
+  };
+  const resolveFileFromRef = async (
+    fileUrl: string,
+    filePath: string,
+  ): Promise<{ buf: Buffer; contentType: string }> => {
+    const contentType = 'application/octet-stream';
+    if (filePath && isPathAllowed(filePath) && existsSync(filePath)) {
+      return { buf: readFileSync(filePath), contentType };
+    }
+    if (filePath) throw new Error('file_path must be under uploads, workspace, or a watch folder');
+    if (!fileUrl) throw new Error('Body must include file_url or file_path');
+    try {
+      const urlObj = new URL(fileUrl);
+      const name = urlObj.pathname.replace(/^\/api\/uploads\//, '').split('/')[0] || '';
+      if (urlObj.pathname.startsWith('/api/uploads/') && UPLOADS_NAME_REGEX.test(name)) {
+        const path = join(uploadsDir, name);
+        if (existsSync(path)) return { buf: readFileSync(path), contentType };
+        throw new Error('Upload file not found; it may have expired');
+      }
+      const fileRes = await fetch(fileUrl, { method: 'GET' });
+      if (!fileRes.ok) throw new Error(`Failed to fetch file: ${fileRes.status}`);
+      const buf = Buffer.from(await fileRes.arrayBuffer());
+      const ct = (fileRes.headers.get('content-type') || contentType).split(';')[0].trim();
+      return { buf, contentType: ct };
+    } catch (e) {
+      throw new Error((e as Error).message || 'Invalid file_url or fetch failed');
+    }
+  };
+
+  const handleUploadProxy = async (req: Request, res: Response) => {
+    try {
+      const destination = typeof req.body?.destination === 'string' ? req.body.destination.trim().toLowerCase() : '';
+      const connectionId = typeof req.body?.connection_id === 'string' ? req.body.connection_id.trim() : '';
+      const fileUrl =
+        (typeof req.body?.file_url === 'string' ? req.body.file_url.trim() : '') ||
+        (typeof req.body?.video_url === 'string' ? req.body.video_url.trim() : '');
+      const filePath =
+        (typeof req.body?.file_path === 'string' ? req.body.file_path.trim() : '') ||
+        (typeof req.body?.video_path === 'string' ? req.body.video_path.trim() : '');
+      const metadata = (req.body?.metadata && typeof req.body.metadata === 'object') ? req.body.metadata as Record<string, unknown> : {};
+      const title = typeof req.body?.title === 'string' ? req.body.title.trim() : (typeof metadata.title === 'string' ? metadata.title : '');
+      const description = typeof req.body?.description === 'string' ? req.body.description.trim() : (typeof metadata.description === 'string' ? metadata.description : '');
+      const privacyStatus = ['public', 'private', 'unlisted'].includes(
+        (req.body?.privacyStatus as string) || (metadata.privacyStatus as string) || '',
+      )
+        ? ((req.body?.privacyStatus as string) || (metadata.privacyStatus as string) || 'private')
+        : 'private';
+
+      if (!destination || !connectionId) {
+        res.status(400).json({ error: 'Body must include destination and connection_id' });
+        return;
+      }
+      if (!filePath && !fileUrl) {
+        res.status(400).json({ error: 'Body must include file_url or file_path (or video_url/video_path for youtube)' });
+        return;
+      }
+
+      const { buf, contentType } = await resolveFileFromRef(fileUrl, filePath);
+      if (buf.length > MEDIA_UPLOAD_MAX_BYTES) {
+        res.status(400).json({ error: `File too large (max ${MEDIA_UPLOAD_MAX_BYTES / (1024 * 1024)} MB)` });
+        return;
+      }
+
+      const tokenResult = await getConnectionToken(connectionId);
+      if (!tokenResult.ok) {
+        res.status(tokenResult.status).json({ error: tokenResult.error });
+        return;
+      }
+      const accessToken = tokenResult.accessToken;
+
+      if (destination === 'youtube') {
+        const ytTitle = title || (typeof metadata.title === 'string' ? metadata.title : '');
+        if (!ytTitle) {
+          res.status(400).json({ error: 'YouTube upload requires title (or metadata.title)' });
+          return;
+        }
+        const initRes = await fetch(
+          'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status',
+          {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              snippet: { title: ytTitle, description: description || undefined },
+              status: { privacyStatus },
+            }),
+          },
+        );
+        if (!initRes.ok) {
+          const errText = await initRes.text();
+          log('gateway', 'error', 'YouTube init upload failed', { status: initRes.status, detail: errText.slice(0, 200) });
+          res.status(initRes.status === 401 ? 401 : 502).json({ error: 'YouTube upload init failed', detail: errText.slice(0, 200) });
+          return;
+        }
+        const uploadUrl = initRes.headers.get('Location');
+        if (!uploadUrl) {
+          res.status(502).json({ error: 'YouTube did not return upload URL' });
+          return;
+        }
+        const putRes = await fetch(uploadUrl, {
+          method: 'PUT',
+          headers: { 'Content-Length': String(buf.length), 'Content-Type': contentType },
+          body: new Uint8Array(buf),
+        });
+        if (!putRes.ok) {
+          const errText = await putRes.text();
+          log('gateway', 'error', 'YouTube PUT upload failed', { status: putRes.status, detail: errText.slice(0, 200) });
+          res.status(502).json({ error: 'YouTube upload failed', detail: errText.slice(0, 200) });
+          return;
+        }
+        const putJson = (await putRes.json()) as { id?: string };
+        const videoId = putJson?.id;
+        if (!videoId) {
+          res.status(502).json({ error: 'YouTube did not return video id' });
+          return;
+        }
+        return res.json({
+          ok: true,
+          id: videoId,
+          link: `https://www.youtube.com/watch?v=${videoId}`,
+          message: 'Video uploaded to YouTube successfully.',
+        });
+      }
+
+      if (destination === 'drive') {
+        res.status(501).json({ error: 'Drive upload not implemented yet; use destination youtube for now.' });
+        return;
+      }
+
+      res.status(400).json({ error: `Unknown destination: ${destination}. Use youtube or drive.` });
+    } catch (e) {
+      const msg = (e as Error).message;
+      log('gateway', 'error', msg);
+      if (msg.includes('Set PORTAL') || msg.includes('Token')) res.status(503).json({ error: msg });
+      else res.status(500).json({ error: msg });
+    }
+  };
+
+  app.post('/api/upload-proxy', handleUploadProxy);
+  app.post('/api/youtube-upload-proxy', (req: Request, res: Response) => {
+    (req.body as Record<string, unknown>).destination = 'youtube';
+    return handleUploadProxy(req, res);
   });
 
   if (existsSync(dashboardDist)) {

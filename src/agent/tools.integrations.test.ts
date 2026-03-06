@@ -13,17 +13,20 @@ vi.mock("../channels/discord.js", () => ({
   getEffectiveDiscordBotToken: vi.fn(),
 }));
 
-// Mock config for list_integrations_connections (portal vs integrations URL) and spec-loader context path
-vi.mock("../config.js", () => ({
-  config: {
-    integrationsUrl: null as string | null,
-    agentToolAllowlist: null,
-    agentToolProfile: "full",
-    agentContextPath: "context",
-  },
-  getPortalGatewayBase: vi.fn(() => null as string | null),
-  getEffectivePortalApiKey: vi.fn(() => null as string | null),
-}));
+// Mock config: resolve store system skills path from cwd (agent/) so spec-loader finds stripe/discord tools.
+vi.mock("../config.js", () => {
+  const { join } = require("path");
+  return {
+    config: {
+      integrationsUrl: null,
+      agentToolAllowlist: null,
+      agentToolProfile: "full",
+      agentContextPath: join(process.cwd(), "..", "store", "data", "skills", "system"),
+    },
+    getPortalGatewayBase: vi.fn(() => null),
+    getEffectivePortalApiKey: vi.fn(() => null),
+  };
+});
 
 const mockFetch = vi.fn();
 
@@ -62,16 +65,16 @@ describe("integration tools", () => {
       const { getEffectiveStripeSecretKey } = await import("../channels/stripe.js");
       (getEffectiveStripeSecretKey as ReturnType<typeof vi.fn>).mockReturnValue("sk_test_xxx");
 
+      const body = {
+        data: [
+          { id: "cus_1", email: "a@example.com", name: "Alice" },
+          { id: "cus_2", email: "b@example.com", name: "Bob" },
+        ],
+      };
       mockFetch.mockResolvedValueOnce({
         status: 200,
         ok: true,
-        json: () =>
-          Promise.resolve({
-            data: [
-              { id: "cus_1", email: "a@example.com", name: "Alice" },
-              { id: "cus_2", email: "b@example.com", name: "Bob" },
-            ],
-          }),
+        text: () => Promise.resolve(JSON.stringify(body)),
       });
 
       const tool = getTool("stripe_list_customers");
@@ -96,13 +99,18 @@ describe("integration tools", () => {
 
       const tool = getTool("stripe_list_customers");
       const result = await (tool!.execute as (args: unknown) => Promise<unknown>)({});
-      expect(result).toEqual({ error: "Invalid Stripe secret key (unauthorized)" });
+      expect(result).toHaveProperty("error");
+      expect((result as { error: string }).error).toContain("Invalid Stripe secret key (unauthorized)");
     });
 
     it("respects limit parameter", async () => {
       const { getEffectiveStripeSecretKey } = await import("../channels/stripe.js");
       (getEffectiveStripeSecretKey as ReturnType<typeof vi.fn>).mockReturnValue("sk_test");
-      mockFetch.mockResolvedValueOnce({ status: 200, ok: true, json: () => Promise.resolve({ data: [] }) });
+      mockFetch.mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({ data: [] })),
+      });
 
       const tool = getTool("stripe_list_customers");
       await (tool!.execute as (args: unknown) => Promise<unknown>)({ limit: 25 });
@@ -130,14 +138,14 @@ describe("integration tools", () => {
       const { getEffectiveDiscordBotToken } = await import("../channels/discord.js");
       (getEffectiveDiscordBotToken as ReturnType<typeof vi.fn>).mockReturnValue("bot_token_xxx");
 
+      const body = [
+        { id: "123", name: "My Server" },
+        { id: "456", name: "Other Guild" },
+      ];
       mockFetch.mockResolvedValueOnce({
         status: 200,
         ok: true,
-        json: () =>
-          Promise.resolve([
-            { id: "123", name: "My Server" },
-            { id: "456", name: "Other Guild" },
-          ]),
+        text: () => Promise.resolve(JSON.stringify(body)),
       });
 
       const tool = getTool("discord_list_guilds");
@@ -181,14 +189,14 @@ describe("integration tools", () => {
     it("returns channels for a guild", async () => {
       const { getEffectiveDiscordBotToken } = await import("../channels/discord.js");
       (getEffectiveDiscordBotToken as ReturnType<typeof vi.fn>).mockReturnValue("token");
+      const body = [
+        { id: "ch1", name: "general", type: 0 },
+        { id: "ch2", name: "voice", type: 2 },
+      ];
       mockFetch.mockResolvedValueOnce({
         status: 200,
         ok: true,
-        json: () =>
-          Promise.resolve([
-            { id: "ch1", name: "general", type: 0 },
-            { id: "ch2", name: "voice", type: 2 },
-          ]),
+        text: () => Promise.resolve(JSON.stringify(body)),
       });
 
       const tool = getTool("discord_list_channels");
@@ -238,7 +246,7 @@ describe("integration tools", () => {
       mockFetch.mockResolvedValueOnce({
         status: 200,
         ok: true,
-        json: () => Promise.resolve({ id: "msg_123" }),
+        text: () => Promise.resolve(JSON.stringify({ id: "msg_123" })),
       });
 
       const tool = getTool("discord_send_message");

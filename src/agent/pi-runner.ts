@@ -8,6 +8,7 @@
 import { createRequire } from 'module';
 import { config } from '../config.js';
 import { getAgentMessages, appendAgentMessage } from '../db/index.js';
+import { getCurrentDateTimeContext } from './loop.js';
 import { getMemoryForContext, getSharedScopeKeyForSession } from './memory.js';
 import { listTools } from './tools.js';
 import type { ToolDef, AgentTurnMessage, ToolCallSpec } from '../types.js';
@@ -164,6 +165,7 @@ export async function runAgentTurnWithPi(options: RunTurnOptions): Promise<RunTu
   if (memoryParts.length > 0) {
     systemText += '\n\n## Memory\n\n' + memoryParts.join('\n\n');
   }
+  systemText += '\n\n## Current date and time\n\n' + getCurrentDateTimeContext();
   const historyLimit = config.agentMaxHistoryMessages > 0 ? config.agentMaxHistoryMessages + 50 : 200;
   const history = getAgentMessages(sessionId, historyLimit);
   const piMessages = sulalaMessagesToPi(history, systemText);

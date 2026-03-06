@@ -19,7 +19,7 @@ import type { Config } from './types.js';
 const SULALA_ENV_LOAD_KEYS = [
   'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY', 'GOOGLE_GEMINI_API_KEY', 'GEMINI_API_KEY',
   'OLLAMA_BASE_URL', 'AI_DEFAULT_PROVIDER', 'GATEWAY_API_KEY', 'PORTAL_GATEWAY_URL', 'PORTAL_API_KEY',
-  'STORE_PUBLISH_API_KEY', 'ALLOWED_BINARIES', 'STRIPE_SECRET_KEY',
+  'STORE_PUBLISH_API_KEY', 'ALLOWED_BINARIES', 'STRIPE_SECRET_KEY', 'DISCORD_BOT_TOKEN',
 ];
 (function loadSulalaEnv() {
   const path = join(homedir(), '.sulala', '.env');
@@ -91,6 +91,13 @@ export function getPortalGatewayBase(): string | null {
 /** Portal API key: process.env first (dashboard-saved), then config. Use at call time so saving in Settings applies without restart. */
 export function getEffectivePortalApiKey(): string | null {
   return (process.env.PORTAL_API_KEY || '').trim() || config.portalApiKey || null;
+}
+
+/** Local gateway base URL (this agent). Use for tools that run locally (e.g. YouTube upload proxy) so video never goes to Portal. */
+export function getGatewayBaseUrl(): string {
+  const host = config.host || '127.0.0.1';
+  const port = config.port || 2026;
+  return `http://${host}:${port}`;
 }
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

@@ -29,6 +29,15 @@ export type AgentStreamEvent =
 const DEFAULT_SYSTEM = 'You are a helpful assistant. You have access to tools; use them when appropriate.';
 const MAX_TOOL_TURNS = 10;
 
+/** Current date/time and timezone for the system prompt so the model can resolve "today", "tonight", etc. Exported for Pi runner. */
+export function getCurrentDateTimeContext(): string {
+  const tz = (process.env.AGENT_TIMEZONE || '').trim() || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const now = new Date();
+  const dateStr = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+  const timeStr = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit', hour12: true }).format(now);
+  return `Current date and time: ${dateStr}, ${timeStr} (timezone: ${tz}). Use this when the user says "today", "tonight", "now", "tomorrow", or similar.`;
+}
+
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) {
     const e = new Error('Agent run aborted');
@@ -283,6 +292,7 @@ function loadContextFromPaths(): string {
   // Inject workspace path so the agent knows where to create skills and watch-folder automations.
   const workspaceSection =
     `## Workspace\n\n` +
+    `- **Integrations and MCP (posting or other actions on a service)**: For any service (Bluesky, X/Twitter, or future integrations): (1) Call **list_integrations_connections** with the provider that matches the request (e.g. provider "bluesky", "twitter"). (2) If connections exist, use the integration tool that matches that provider (e.g. bluesky_post for bluesky, x_post for twitter—match tool name to provider). (3) If no connection exists for that provider, or no matching integration tool is available, use an **MCP tool** if one fits: tools whose names start with **mcp_** come from configured MCP servers; pick one whose name or description matches the requested service and action (e.g. posting to Twitter → mcp_twitter_post_tweet). Never use an integration tool for a different provider (e.g. do not use x_post for Bluesky or bluesky_post for X/Twitter).\n\n` +
     `- **Skills you create**: use **write_file** with path \`${config.skillsWorkspaceMyDir}/<slug>/README.md\` (e.g. \`${config.skillsWorkspaceMyDir}/my-skill/README.md\`). Also create \`${config.skillsWorkspaceMyDir}/<slug>/tools.yaml\` with \`tools: []\` and a short comment so the user can add required tools there. Do not use \`~\` or \`$HOME\`. Hub-installed skills live in \`${config.skillsWorkspaceDir}/<slug>/\`; keep created-by-you skills in \`${config.skillsWorkspaceMyDir}/\`.\n\n` +
     `- **Scripts and watch-folder automations**: Workspace root is \`${config.workspaceDir}\`. When the user asks to watch a folder and do something (e.g. post new images to Bluesky or Facebook):\n` +
     `  1. Create a script under \`${config.workspaceDir}/scripts/\` (e.g. \`scripts/watch_bluesky.sh\` or \`scripts/watch_facebook.sh\`) that accepts the **file path as first argument** (\`$1\`) and uses env vars for credentials.\n` +
@@ -310,6 +320,8 @@ async function resolveSystemPrompt(
   if (memoryParts.length > 0) {
     withContext += '\n\n## Memory\n\n' + memoryParts.join('\n\n');
   }
+
+  withContext += '\n\n## Current date and time\n\n' + getCurrentDateTimeContext();
 
   const overridden = await runAgentHooksBeforePromptBuild(sessionId, {
     systemPrompt: withContext,

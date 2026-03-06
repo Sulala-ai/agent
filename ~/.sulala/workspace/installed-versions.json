@@ -1,0 +1,10 @@
+{
+  "weather": {
+    "version": "1.0.0",
+    "target": "managed"
+  },
+  "output-helloworld": {
+    "version": "1.0.0",
+    "target": "managed"
+  }
+}

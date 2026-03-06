@@ -7,6 +7,7 @@ import {
   startPortalConnect,
   deleteIntegrationsConnection,
   deletePortalConnection,
+  fetchOAuthConnectUrl,
   type IntegrationItem,
 } from "@/lib/api";
 import { getAllIntegrationApps } from "@/features/integrations/apps";
@@ -22,6 +23,8 @@ export function useIntegrations(activePage: string, onError: (msg: string) => vo
   const [integrationsBaseUrl, setIntegrationsBaseUrl] = useState<string | undefined>(undefined);
   /** Portal gateway URL is set in .env but PORTAL_API_KEY is empty; show "create API key" instead of generic error. */
   const [portalUrlSetButKeyMissing, setPortalUrlSetButKeyMissing] = useState(false);
+  /** When true, agent has OAuth client id set; show "Connect with Sulala (OAuth)" button. */
+  const [portalOAuthConnectAvailable, setPortalOAuthConnectAvailable] = useState(false);
 
   const INTEGRATIONS_LOAD_TIMEOUT_MS = 15_000;
 
@@ -31,6 +34,7 @@ export function useIntegrations(activePage: string, onError: (msg: string) => vo
     setPortalGatewayUrl(null);
     setIntegrationsBaseUrl(undefined);
     setPortalUrlSetButKeyMissing(false);
+    setPortalOAuthConnectAvailable(false);
     const timeoutPromise = new Promise<never>((_, reject) => {
       setTimeout(() => reject(new Error("Request timed out. Check that the agent and integrations service are running.")), INTEGRATIONS_LOAD_TIMEOUT_MS);
     });
@@ -38,6 +42,7 @@ export function useIntegrations(activePage: string, onError: (msg: string) => vo
       const config = await Promise.race([fetchConfig(), timeoutPromise]);
       const needsPortalKey = !!(config.portalGatewayUrl?.trim() && config.integrationsMode !== "portal");
       setPortalUrlSetButKeyMissing(needsPortalKey);
+      setPortalOAuthConnectAvailable(config.portalOAuthConnectAvailable === true);
       if (config.integrationsMode === "portal") {
         setIntegrationsManagedByPortal(true);
         setPortalGatewayUrl(config.portalGatewayUrl ?? null);
@@ -142,6 +147,17 @@ export function useIntegrations(activePage: string, onError: (msg: string) => vo
     [integrationsManagedByPortal, integrationsBaseUrl, load, onError]
   );
 
+  /** Start "Connect with Sulala" OAuth flow: open Portal in external browser; app stays open. Pass return_to (e.g. onboarding_step_3) to land back on a specific view after callback. */
+  const startOAuthConnect = useCallback(async (return_to?: string) => {
+    try {
+      const { url } = await fetchOAuthConnectUrl(return_to);
+      window.open(url, "_blank", "noopener,noreferrer");
+      // In Electron/some environments the URL opens externally and window.open returns null; don't treat that as an error.
+    } catch (e) {
+      onError((e as Error).message);
+    }
+  }, [onError]);
+
   return {
     integrations,
     loading,
@@ -149,8 +165,10 @@ export function useIntegrations(activePage: string, onError: (msg: string) => vo
     integrationsManagedByPortal,
     portalGatewayUrl,
     portalUrlSetButKeyMissing,
+    portalOAuthConnectAvailable,
     load,
     handleConnect,
     handleDisconnect,
+    startOAuthConnect,
   };
 }

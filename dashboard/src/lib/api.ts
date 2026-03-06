@@ -377,6 +377,14 @@ export type Config = {
   portalGatewayUrl?: string | null;
   /** When true, agent has PORTAL_OAUTH_CLIENT_ID set; dashboard can show "Connect with Sulala (OAuth)". */
   portalOAuthConnectAvailable?: boolean;
+  /** ChatGPT Apps SDK / MCP OAuth 2.1 config (onboarding and settings). */
+  chatgptOAuth?: {
+    enabled: boolean;
+    resourceUrl: string | null;
+    authorizationServer: string | null;
+    scopesSupported: string[];
+    redirectUrisHint: string[];
+  };
 };
 
 export type AgentModel = { id: string; name: string };
@@ -552,6 +560,36 @@ export async function deleteIntegrationsConnection(id: string, baseUrl?: string 
 export async function fetchConfig(): Promise<Config> {
   const res = await fetch(`${GATEWAY_URL}/api/config`, { headers: headers(), cache: "no-store" });
   if (!res.ok) throw new Error(`Failed to fetch config: ${res.status}`);
+  return res.json();
+}
+
+/** MCP server entry (env values redacted as "***" when from GET). */
+export type McpServerEntry = {
+  name: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+};
+
+export async function fetchMcpConfig(): Promise<{ servers: McpServerEntry[] }> {
+  const res = await fetch(`${GATEWAY_URL}/api/mcp/config`, { headers: headers(), cache: "no-store" });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || `Failed to fetch MCP config: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function updateMcpConfig(servers: McpServerEntry[]): Promise<{ servers: McpServerEntry[] }> {
+  const res = await fetch(`${GATEWAY_URL}/api/mcp/config`, {
+    method: "PUT",
+    headers: headers(),
+    body: JSON.stringify({ servers }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || `Failed to save MCP config: ${res.status}`);
+  }
   return res.json();
 }
 
@@ -852,16 +890,6 @@ export async function fetchAgentSkillsSystemRegistry(): Promise<{ skills: AgentR
   if (!systemUrl) return { skills: [] };
   const res = await fetch(systemUrl);
   if (!res.ok) throw new Error(`Failed to fetch system registry: ${res.status}`);
-  return res.json();
-}
-
-export type AgentSkillTemplate = AgentRegistrySkill & { requiredFields: string[] };
-
-export async function fetchAgentSkillsTemplates(): Promise<{
-  templates: AgentSkillTemplate[];
-}> {
-  const res = await fetch(`${GATEWAY_URL}/api/agent/skills/templates`, { headers: headers() });
-  if (!res.ok) throw new Error(`Failed to fetch templates: ${res.status}`);
   return res.json();
 }
 

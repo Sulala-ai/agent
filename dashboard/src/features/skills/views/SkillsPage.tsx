@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowLeft, Copy, Eye, EyeOff, LayoutTemplate, Lock, MoreVertical, Plus, Puzzle, Share2 } from "lucide-react";
+import { ArrowLeft, Copy, Eye, EyeOff, Lock, MoreVertical, Plus, Puzzle, Share2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getHubSkillContentUrl, getHubRegistryUrl, getHubBaseUrl } from "@/lib/api";
-import type { AgentRegistrySkill, AgentSkillTemplate } from "@/lib/api";
+import type { AgentRegistrySkill } from "@/lib/api";
 import {
   Dialog,
   DialogContent,
@@ -35,16 +35,8 @@ import { SkillWizardFlow } from "@/features/skill-wizard";
 
 type SkillsState = ReturnType<typeof useSkills>;
 
-const TEMPLATE_FIELD_LABELS: Record<string, string> = {
-  apiKey: "API Key",
-  handle: "Handle",
-  name: "Name",
-  timezone: "Timezone",
-};
-
 export function SkillsPage(state: SkillsState) {
   const [wizardOpen, setWizardOpen] = useState(false);
-  const [templateToUse, setTemplateToUse] = useState<AgentSkillTemplate | null>(null);
   const [publishDialog, setPublishDialog] = useState<{ slug: string; name: string } | null>(null);
   const {
     skills,
@@ -74,12 +66,9 @@ export function SkillsPage(state: SkillsState) {
     handleInstallSkill,
     handleUninstallSkill,
     handlePublishSkill,
-    handleUseTemplate,
     handleUpdateSkills,
     refreshRegistry,
     validateSkillEnvConfig,
-    templates,
-    templatesLoading,
     publishStatusMap,
   } = state;
 
@@ -113,10 +102,6 @@ export function SkillsPage(state: SkillsState) {
                   </Button>
                 )}
               </>
-            ) : skillsTab === "templates" ? (
-              <Button variant="outline" size="sm" onClick={loadSkills} disabled={templatesLoading}>
-                {templatesLoading ? "…" : "Refresh"}
-              </Button>
             ) : (
               <Button variant="outline" size="sm" onClick={refreshRegistry} disabled={registryLoading}>
                 {registryLoading ? "…" : "Refresh"}
@@ -125,11 +110,10 @@ export function SkillsPage(state: SkillsState) {
           </div>
         </CardHeader>
         <CardContent>
-          <Tabs value={skillsTab} onValueChange={(v) => setSkillsTab(v as "installed" | "myskills" | "hub" | "templates")}>
+          <Tabs value={skillsTab} onValueChange={(v) => setSkillsTab(v as "installed" | "myskills" | "hub")}>
             <TabsList className="mb-4">
               <TabsTrigger value="installed">Installed</TabsTrigger>
               <TabsTrigger value="myskills">My skills</TabsTrigger>
-              <TabsTrigger value="templates">Templates</TabsTrigger>
               <TabsTrigger value="hub">From Hub</TabsTrigger>
             </TabsList>
             <TabsContent value="installed" className="mt-0">
@@ -175,15 +159,6 @@ export function SkillsPage(state: SkillsState) {
                 }
               />
             </TabsContent>
-            <TabsContent value="templates" className="mt-0">
-              <TemplatesTab
-                skills={skills}
-                templates={templates}
-                templatesLoading={templatesLoading}
-                installingSlug={installingSlug}
-                onUseTemplate={setTemplateToUse}
-              />
-            </TabsContent>
             <TabsContent value="hub" className="mt-0">
               <HubTab
                 skills={skills}
@@ -210,13 +185,6 @@ export function SkillsPage(state: SkillsState) {
         open={wizardOpen}
         onOpenChange={setWizardOpen}
         onSuccess={loadSkills}
-      />
-
-      <UseTemplateDialog
-        template={templateToUse}
-        installingSlug={installingSlug}
-        onClose={() => setTemplateToUse(null)}
-        onSubmit={handleUseTemplate}
       />
 
       <PublishToStoreDialog
@@ -322,146 +290,6 @@ function InstalledTab({
         );
       })}
     </div>
-  );
-}
-
-function TemplatesTab({
-  skills,
-  templates,
-  templatesLoading,
-  installingSlug,
-  onUseTemplate,
-}: {
-  skills: SkillsState["skills"];
-  templates: AgentSkillTemplate[];
-  templatesLoading: boolean;
-  installingSlug: string | null;
-  onUseTemplate: (t: AgentSkillTemplate) => void;
-}) {
-  const installedSlugs = new Set(
-    skills.map((s) => s.slug ?? s.filePath.split(/[/\\]/).pop()?.replace(/\.md$/, "") ?? s.name)
-  );
-  const available = templates.filter((t) => !installedSlugs.has(t.slug));
-
-  if (templatesLoading && !templates.length) {
-    return <p className="text-muted-foreground text-sm">Loading templates…</p>;
-  }
-  if (available.length === 0) {
-    return (
-      <p className="text-muted-foreground text-sm">
-        {templates.length === 0
-          ? "No templates available. Add template skills to the registry."
-          : "All templates are already installed. Check Installed or From Hub."}
-      </p>
-    );
-  }
-
-  return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      {available.map((t) => (
-        <article
-          key={t.slug}
-          className="border-border/70 bg-card/30 flex flex-col gap-3 rounded-xl border p-4"
-        >
-          <span className="bg-primary/10 text-primary flex size-10 shrink-0 items-center justify-center rounded-lg">
-            <LayoutTemplate className="size-5" />
-          </span>
-          <div className="flex flex-1 flex-col gap-2 min-w-0">
-            <Badge variant="secondary" className="text-xs w-fit">
-              Template
-            </Badge>
-            <h3 className="font-semibold text-sm">{t.name || t.slug}</h3>
-            <p className="text-muted-foreground line-clamp-3 text-xs flex-1">{t.description || ""}</p>
-            <Button
-              size="sm"
-              className="w-fit mt-1"
-              disabled={installingSlug !== null}
-              onClick={() => onUseTemplate(t)}
-            >
-              {installingSlug === t.slug ? "Installing…" : "Use template"}
-            </Button>
-          </div>
-        </article>
-      ))}
-    </div>
-  );
-}
-
-function UseTemplateDialog({
-  template,
-  installingSlug,
-  onClose,
-  onSubmit,
-}: {
-  template: AgentSkillTemplate | null;
-  installingSlug: string | null;
-  onClose: () => void;
-  onSubmit: (slug: string, formValues: Record<string, string>) => Promise<void>;
-}) {
-  const [values, setValues] = useState<Record<string, string>>({});
-  const [submitting, setSubmitting] = useState(false);
-
-  const open = !!template;
-  const requiredFields = template?.requiredFields ?? [];
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    if (!template) return;
-    e.preventDefault();
-    setSubmitting(true);
-    try {
-      await onSubmit(template.slug, values);
-      setValues({});
-      onClose();
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleClose = () => {
-    setValues({});
-    onClose();
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={(open) => !open && handleClose()}>
-      <DialogContent className="max-w-md" showCloseButton>
-        <DialogHeader>
-          <DialogTitle>Use template: {template?.name ?? template?.slug}</DialogTitle>
-          <DialogDescription>
-            {template?.description}
-            {requiredFields.length > 0
-              ? " Fill in the fields below; the skill will be installed and configured."
-              : " No configuration needed. Click Install to add this skill."}
-          </DialogDescription>
-        </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4 pt-2">
-          {requiredFields.map((field) => (
-            <div key={field} className="space-y-2">
-              <Label htmlFor={`template-${field}`}>
-                {TEMPLATE_FIELD_LABELS[field] ?? field}
-              </Label>
-              <input
-                id={`template-${field}`}
-                type={/password|secret|key|token/i.test(field) ? "password" : "text"}
-                className="border-input bg-background w-full rounded-md border px-3 py-2 text-sm"
-                value={values[field] ?? ""}
-                onChange={(e) => setValues((v) => ({ ...v, [field]: e.target.value }))}
-                placeholder={TEMPLATE_FIELD_LABELS[field] ?? field}
-                autoComplete="off"
-              />
-            </div>
-          ))}
-          <DialogFooter className="gap-2 pt-2">
-            <Button type="button" variant="outline" onClick={handleClose}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={submitting || installingSlug !== null}>
-              {submitting || installingSlug ? "Installing…" : "Install"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
   );
 }
 

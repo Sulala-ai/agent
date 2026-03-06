@@ -630,7 +630,7 @@ export function ChatPage(props: ChatPageProps) {
           <label className="cursor-pointer shrink-0 rounded-md border border-input px-2 py-2 text-muted-foreground hover:bg-muted/50">
             <input
               type="file"
-              accept="image/*"
+              accept="image/*,video/*,.mp4,.webm,.mov,.m4v,.avi"
               className="sr-only"
               multiple
               onChange={(e) => {

@@ -2,7 +2,7 @@
  * Stripe channel config: secret key for agent tools (customers, invoices).
  * Config can be set from env or from the dashboard (stored in DB); DB overrides env.
  */
-import { config } from '../config.js';
+import { config, getSulalaEnvKey } from '../config.js';
 import { getChannelConfig, setChannelConfig } from '../db/index.js';
 
 const CHANNEL_KEY = 'stripe';
@@ -22,10 +22,12 @@ function parseStripeConfig(raw: string | null): { secretKey: string | null } | n
   }
 }
 
-/** Effective key: DB overrides env. Used by agent Stripe tools. */
+/** Effective key: DB overrides dashboard/env, then ~/.sulala/.env at request time. Used by agent Stripe tools. */
 export function getEffectiveStripeSecretKey(): string | null {
   const fromDb = parseStripeConfig(getChannelConfig(CHANNEL_KEY));
   if (fromDb?.secretKey) return fromDb.secretKey;
+  const fromFile = getSulalaEnvKey('STRIPE_SECRET_KEY');
+  if (fromFile?.trim()) return fromFile.trim();
   return config.stripeSecretKey;
 }
 

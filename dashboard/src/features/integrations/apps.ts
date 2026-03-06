@@ -14,6 +14,7 @@ import {
   LayoutGrid,
   Activity,
   Video,
+  Youtube,
   Cloud,
   FolderKanban,
   Presentation,
@@ -58,6 +59,11 @@ const appMeta: IntegrationAppMeta[] = [
   { id: "jira", name: "Jira", description: "Issues and projects", category: "featured", icon: FolderKanban, logoUrl: `${LOGO_BASE}/jirasoftware` },
   { id: "slides", name: "Google Slides", description: "Presentations and slides", category: "featured", icon: Presentation, logoUrl: `${LOGO_BASE}/googleslides` },
   { id: "figma", name: "Figma", description: "Design files and prototypes", category: "featured", icon: PenTool, logoUrl: `${LOGO_BASE}/figma` },
+  { id: "trello", name: "Trello", description: "Boards, lists, and cards", category: "productivity", icon: FolderKanban, logoUrl: `${LOGO_BASE}/trello` },
+  { id: "twitter", name: "Twitter / X", description: "Post and read tweets", category: "featured", icon: MessageCircle, logoUrl: `${LOGO_BASE}/x` },
+  { id: "microsoft", name: "Microsoft 365", description: "Outlook, Calendar, OneDrive", category: "featured", icon: Mail, logoUrl: `${LOGO_BASE}/microsoft` },
+  { id: "zendesk", name: "Zendesk", description: "Tickets and support", category: "productivity", icon: MessageCircle, logoUrl: `${LOGO_BASE}/zendesk` },
+  { id: "youtube", name: "YouTube", description: "Channels, videos, and uploads", category: "featured", icon: Youtube, logoUrl: `${LOGO_BASE}/youtube` },
 ];
 
 const byId = new Map<string, IntegrationAppMeta>(appMeta.map((a) => [a.id, a]));

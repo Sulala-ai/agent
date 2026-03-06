@@ -8,7 +8,7 @@ import { parse as parseYaml } from 'yaml';
 import type { ToolDef } from '../../types.js';
 import { getEffectiveStripeSecretKey } from '../../channels/stripe.js';
 import { getEffectiveDiscordBotToken } from '../../channels/discord.js';
-import { getPortalGatewayBase, getEffectivePortalApiKey } from '../../config.js';
+import { getPortalGatewayBase, getEffectivePortalApiKey, getGatewayBaseUrl } from '../../config.js';
 import type { Config } from '../../types.js';
 
 type AuthResult =
@@ -56,6 +56,13 @@ const AUTH_REGISTRY: Record<
     },
     notConfiguredMessage: 'Set PORTAL_GATEWAY_URL and PORTAL_API_KEY (from Portal → API Keys)',
   },
+  gateway: {
+    getCredentials: () => {
+      const base = getGatewayBaseUrl();
+      return { headers: {}, baseUrl: base.replace(/\/$/, '') };
+    },
+    notConfiguredMessage: '',
+  },
 };
 
 interface ToolParamSpec {
@@ -88,6 +95,8 @@ interface StepSpec {
   responsePath?: string;
   /** Only run this step when this arg is truthy (e.g. "finalize"). */
   when?: string;
+  /** Optional headers for this step (values can use {{step0.accessToken}} etc.). Merged over auth headers. */
+  headers?: Record<string, string>;
 }
 
 interface ResponseSpec {
@@ -347,6 +356,12 @@ async function executeSteps(
 
     const url = interpolate(step.url, scope, stepContext);
     const init: RequestInit = { method: step.method, headers: { ...headers } };
+    if (step.headers && Object.keys(step.headers).length > 0) {
+      for (const [k, v] of Object.entries(step.headers)) {
+        const resolved = interpolate(v, scope, stepContext);
+        if (resolved) (init.headers as Record<string, string>)[k] = resolved;
+      }
+    }
 
     if (step.method === 'POST') {
       if (step.bodyType === 'form') {
@@ -611,11 +626,13 @@ function getContextDirs(config: Config): string[] {
 
 /**
  * Scan context dirs for subdirs that contain tools.yaml, load specs, and register one tool per spec.
+ * Returns the list of tool names that were registered (for later unregister on skills refresh).
  */
 export function registerSpecTools(
   registerTool: (tool: ToolDef) => void,
   config: Config,
-): void {
+): string[] {
+  const registered: string[] = [];
   const contextDirs = getContextDirs(config);
   for (const base of contextDirs) {
     if (!existsSync(base) || !statSync(base).isDirectory()) continue;
@@ -628,6 +645,7 @@ export function registerSpecTools(
       for (const spec of specs) {
         if (!spec.name || !spec.description) continue;
         if (!spec.steps?.length && !spec.request?.url) continue;
+        registered.push(spec.name);
         registerTool({
           name: spec.name,
           description: spec.description,
@@ -638,4 +656,5 @@ export function registerSpecTools(
       }
     }
   }
+  return registered;
 }

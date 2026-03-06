@@ -2,7 +2,7 @@
  * Discord channel config: bot token for agent tools (list guilds, list channels, send message).
  * Config can be set from env or from the dashboard (stored in DB); DB overrides env.
  */
-import { config } from '../config.js';
+import { config, getSulalaEnvKey } from '../config.js';
 import { getChannelConfig, setChannelConfig } from '../db/index.js';
 
 const CHANNEL_KEY = 'discord';
@@ -22,10 +22,12 @@ function parseDiscordConfig(raw: string | null): { botToken: string | null } | n
   }
 }
 
-/** Effective token: DB overrides env. Used by agent Discord tools. */
+/** Effective token: DB overrides dashboard/env, then ~/.sulala/.env at request time. Used by agent Discord tools. */
 export function getEffectiveDiscordBotToken(): string | null {
   const fromDb = parseDiscordConfig(getChannelConfig(CHANNEL_KEY));
   if (fromDb?.botToken) return fromDb.botToken;
+  const fromFile = getSulalaEnvKey('DISCORD_BOT_TOKEN');
+  if (fromFile?.trim()) return fromFile.trim();
   return config.discordBotToken;
 }
 

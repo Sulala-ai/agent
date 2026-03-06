@@ -10,7 +10,7 @@ function parseModelSizeBytes(sizeStr: string): number | null {
   if (unit === "MB") return Math.round(val * 1024 * 1024);
   return null;
 }
-import { ChevronRight, Check, Cpu, HardDrive, Zap } from "lucide-react";
+import { ChevronRight, Check, Copy, Cpu, HardDrive, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -20,7 +20,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useEffect, useState } from "react";
 import { useOnboarding, PROVIDERS, PROVIDER_ENV_KEYS } from "../hooks/useOnboarding";
 import type { RecommendedOllamaModel } from "@/lib/api";
-import { putOnboardEnv, fetchOAuthConnectUrl, fetchConfig } from "@/lib/api";
+import { putOnboardEnv, fetchConfig } from "@/lib/api";
 
 const OnboardingContext = createContext<ReturnType<typeof useOnboarding> | null>(null);
 function useOnboardingContext() {
@@ -200,146 +200,39 @@ function Step2ProviderConfig() {
   );
 }
 
-const DEFAULT_PORTAL_GATEWAY_URL = import.meta.env.VITE_DEFAULT_PORTAL_GATEWAY_URL || "https://portal.sulala.ai/api/gateway";
-
 function Step3Integrations() {
-  const {
-    envKeys,
-    envKeysInput,
-    setEnvKeysInput,
-    saveEnv,
-    setStep,
-    setError,
-    loading,
-    error,
-    selectedProviders,
-  } = useOnboardingContext();
-  const hasPortalInput = (envKeysInput.PORTAL_API_KEY ?? "").trim().length > 0;
-  const portalConfigured = envKeys.PORTAL_API_KEY === "set" || hasPortalInput;
+  const { setStep, selectedProviders } = useOnboardingContext();
   const hasOllama = selectedProviders.includes("ollama");
   const nextStep = hasOllama ? 4 : 3;
-  const [oauthStarting, setOauthStarting] = useState(false);
-  const [oauthOpened, setOauthOpened] = useState(false);
-  /** Portal gateway URL from agent config (.env / ~/.sulala/.env), or default. */
-  const [portalGatewayUrl, setPortalGatewayUrl] = useState<string>(DEFAULT_PORTAL_GATEWAY_URL);
-  const { loadEnv } = useOnboardingContext();
-
-  useEffect(() => {
-    fetchConfig()
-      .then((c) => {
-        const url = (c.portalGatewayUrl ?? "").trim() || DEFAULT_PORTAL_GATEWAY_URL;
-        setPortalGatewayUrl(url);
-      })
-      .catch(() => {});
-  }, []);
-
-  const handleSave = () => {
-    saveEnv(nextStep, { PORTAL_GATEWAY_URL: portalGatewayUrl });
-  };
-
-  const handleOAuthConnect = async () => {
-    setError(null);
-    setOauthStarting(true);
-    try {
-      await putOnboardEnv({ PORTAL_GATEWAY_URL: portalGatewayUrl });
-      const { url } = await fetchOAuthConnectUrl("onboarding_step_3");
-      window.open(url, "_blank", "noopener,noreferrer");
-      // In Electron the URL opens in system browser and window.open returns null; still show "I've signed in" UI.
-      setOauthOpened(true);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setOauthStarting(false);
-    }
-  };
-
-  const handleOAuthDone = async () => {
-    setError(null);
-    await loadEnv();
-  };
 
   return (
     <div className="space-y-6">
       <p className="text-muted-foreground text-sm">
-        Connect with Sulala to use GitHub, Gmail, and other apps. Use OAuth (no API key) or enter an API key below.
+        You can connect apps (GitHub, Gmail, Twitter, etc.) in two ways:
       </p>
-      <div className="grid gap-4">
-        <div className="space-y-2">
-          <Label htmlFor="portal-gateway-url-onboard">Portal gateway URL</Label>
-          <Input
-            id="portal-gateway-url-onboard"
-            type="url"
-            placeholder={DEFAULT_PORTAL_GATEWAY_URL}
-            value={portalGatewayUrl}
-            onChange={(e) => setPortalGatewayUrl(e.target.value.trim() || DEFAULT_PORTAL_GATEWAY_URL)}
-            className="font-mono text-xs"
-          />
-          <p className="text-muted-foreground text-xs">
-            Use <code className="rounded bg-muted px-1">http://localhost:3004/api/gateway</code> for local Portal, or leave default for portal.sulala.ai
-          </p>
-        </div>
-        <div className="flex flex-col gap-2">
-          <Label>Connect with Sulala</Label>
-          <Button
-            variant="outline"
-            onClick={handleOAuthConnect}
-            disabled={oauthStarting}
-          >
-            {oauthStarting ? "Opening…" : "Connect with Sulala (OAuth)"}
-          </Button>
-        </div>
-        <div className="text-muted-foreground text-xs">Or use an API key:</div>
-        <a
-          href={
-            portalGatewayUrl
-              ? `${portalGatewayUrl.replace(/\/api\/gateway$/i, "").replace(/\/$/, "")}/api-keys`
-              : "https://portal.sulala.ai/api-keys"
-          }
-          target="_blank"
-          rel="noreferrer"
-          className="text-primary hover:underline inline-block text-xs"
-        >
-          Create API key →
-        </a>
-        <div className="space-y-2">
-          <Label htmlFor="portal-api-key">Portal API Key</Label>
-          <Input
-            id="portal-api-key"
-            type="password"
-            placeholder={envKeys.PORTAL_API_KEY === "set" ? "(already set)" : "sk_live_..."}
-            value={envKeysInput.PORTAL_API_KEY ?? ""}
-            onChange={(e) =>
-              setEnvKeysInput({ ...envKeysInput, PORTAL_API_KEY: e.target.value })
-            }
-            autoComplete="off"
-          />
-        </div>
-      </div>
-      {error && <div className="text-destructive text-sm">{error}</div>}
+      <ul className="text-muted-foreground list-disc list-inside space-y-1 text-sm">
+        <li>
+          <strong>MCP Servers</strong> — Integrations → MCP Servers tab. Add servers and API keys (e.g. YouTube, Twitter). Find more at{" "}
+          <a href="https://mcpservers.org/" target="_blank" rel="noopener noreferrer" className="text-primary underline hover:no-underline">
+            mcpservers.org
+          </a>
+          .
+        </li>
+        <li>
+          <strong>Sulala Portal</strong> — To use Portal for OAuth apps, add your API key later in <strong>Settings → Portal</strong>.
+        </li>
+      </ul>
+      <p className="text-muted-foreground text-xs">
+        Neither is required now. You can set up either option anytime from the dashboard.
+      </p>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <Button variant="outline" onClick={() => setStep(1)}>
-            Back
-          </Button>
-          {oauthOpened && (
-            <>
-              <span className="text-muted-foreground text-sm">Sign-in opened in your browser. Close that tab and return here when done.</span>
-              <Button variant="secondary" size="sm" onClick={handleOAuthDone}>
-                I've signed in — continue
-              </Button>
-            </>
-          )}
-        </div>
-        <div className="flex gap-2">
-          {portalConfigured && !hasPortalInput && (
-            <Button onClick={() => setStep(nextStep)}>Next</Button>
-          )}
-          {portalConfigured && hasPortalInput && (
-            <Button onClick={handleSave} disabled={loading}>
-              {loading ? "Saving…" : "Save & Next"}
-            </Button>
-          )}
-        </div>
+        <Button variant="outline" onClick={() => setStep(1)}>
+          Back
+        </Button>
+        <Button onClick={() => setStep(nextStep)}>
+          Next
+          <ChevronRight className="ml-1 size-4" />
+        </Button>
       </div>
     </div>
   );
@@ -540,39 +433,18 @@ function Step6Finish() {
 
 type OnboardingFlowProps = { onComplete?: () => void };
 
-const ONBOARDING_STEP_3_RETURN = "onboarding_step_3";
-
 export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
   const onboarding = useOnboarding(onComplete);
-  const { step, selectedProviders, setStep, loadEnv, setError } = onboarding;
+  const { step, selectedProviders } = onboarding;
   const hasOllama = selectedProviders.includes("ollama");
   const totalSteps = hasOllama ? 5 : 4;
   const stepLabels = hasOllama ? STEP_LABELS_WITH_OLLAMA : STEP_LABELS_WITHOUT_OLLAMA;
   const current = Math.max(0, Math.min(step, totalSteps - 1));
 
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const return_to = params.get("return_to");
-    const oauth = params.get("oauth");
-    const message = params.get("message");
-    if (return_to !== ONBOARDING_STEP_3_RETURN || !oauth) return;
-    setStep(2);
-    loadEnv();
-    if (oauth === "error" && message) {
-      const msg = message === "exchange_failed" ? "Token exchange failed. Check PORTAL_OAUTH_CLIENT_SECRET and redirect_uri." : message === "no_token" ? "No access token in response." : message;
-      setError(msg);
-    }
-    const u = new URL(window.location.href);
-    u.searchParams.delete("oauth");
-    u.searchParams.delete("return_to");
-    u.searchParams.delete("message");
-    window.history.replaceState({}, "", u.toString());
-  }, [setStep, loadEnv, setError]);
-
   const cardDescriptions: Record<number, string> = {
     0: "Choose which AI providers you want to use.",
     1: "Enter API keys for cloud providers.",
-    2: "Create an API key at portal.sulala.ai. Required to connect GitHub, Gmail, and other apps.",
+    2: "Connect apps via MCP servers or Sulala Portal (optional). Add Portal API key in Settings → Portal if you use Portal.",
     ...(hasOllama
       ? { 3: "Install local models with Ollama.", 4: "Review and complete setup." }
       : { 3: "Review and complete setup." }),

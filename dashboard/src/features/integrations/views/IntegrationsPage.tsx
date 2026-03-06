@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Search, ChevronRight, Trash2 } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Loader2, Plug, Search, Server, ChevronRight, Trash2 } from "lucide-react";
 import type { IntegrationItem } from "@/lib/api";
+import { McpServersTab } from "@/features/settings/views/McpServersTab";
 
 export type IntegrationsPageProps = {
   integrations: IntegrationItem[];
@@ -35,6 +37,8 @@ export function IntegrationsPage({
     const params = new URLSearchParams(window.location.search);
     const connectionId = params.get("connectionId");
     const error = params.get("error");
+    const oauth = params.get("oauth");
+    const oauthMessage = params.get("message");
     if (connectionId || error) {
       if (error && onError) {
         try {
@@ -47,6 +51,16 @@ export function IntegrationsPage({
       const u = new URL(window.location.href);
       u.searchParams.delete("connectionId");
       u.searchParams.delete("error");
+      window.history.replaceState({}, "", u.toString());
+    } else if (oauth === "success" || oauth === "error") {
+      if (oauth === "error" && oauthMessage && onError) {
+        const msg = oauthMessage === "exchange_failed" ? "Token exchange failed. Check PORTAL_OAUTH_CLIENT_SECRET and redirect_uri." : oauthMessage === "no_token" ? "No access token in response." : oauthMessage;
+        onError(msg);
+      }
+      load();
+      const u = new URL(window.location.href);
+      u.searchParams.delete("oauth");
+      u.searchParams.delete("message");
       window.history.replaceState({}, "", u.toString());
     }
   }, [load, onError]);
@@ -62,18 +76,18 @@ export function IntegrationsPage({
     );
   }, [integrations, search]);
 
-  if (loading && integrations.length === 0) {
-    return (
-      <div className="text-muted-foreground flex flex-1 items-center justify-center gap-2 py-12">
-        <Loader2 className="size-5 animate-spin" />
-        <span>Loading…</span>
-      </div>
-    );
-  }
-
-  if (integrationsManagedByPortal) {
-    return (
-      <div className="flex flex-1 flex-col gap-6 p-4">
+  const connectionsContent = (() => {
+    if (loading && integrations.length === 0) {
+      return (
+        <div className="text-muted-foreground flex flex-1 items-center justify-center gap-2 py-12">
+          <Loader2 className="size-5 animate-spin" />
+          <span>Loading…</span>
+        </div>
+      );
+    }
+    if (integrationsManagedByPortal) {
+      return (
+      <div className="flex flex-1 flex-col gap-6">
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-semibold tracking-tight">Apps</h1>
@@ -204,6 +218,30 @@ export function IntegrationsPage({
       {filteredApps.length === 0 && (
         <p className="text-muted-foreground py-8 text-center text-sm">No apps match your search.</p>
       )}
+    </div>
+  );
+  })();
+
+  return (
+    <div className="flex flex-1 flex-col p-4 min-h-0">
+      <Tabs defaultValue="mcp" className="flex flex-1 flex-col min-h-0">
+        <TabsList className="w-full max-w-xs grid grid-cols-2 mb-4">
+          <TabsTrigger value="mcp" className="flex items-center gap-2">
+            <Server className="size-4" />
+            MCP Servers
+          </TabsTrigger>
+          <TabsTrigger value="connections" className="flex items-center gap-2">
+            <Plug className="size-4" />
+            Connections
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="mcp" className="mt-0 flex-1 data-[state=inactive]:hidden min-h-0">
+          <McpServersTab onError={onError} />
+        </TabsContent>
+        <TabsContent value="connections" className="mt-0 flex-1 data-[state=inactive]:hidden min-h-0">
+          {connectionsContent}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

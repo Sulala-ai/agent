@@ -15,7 +15,8 @@ import { loadSchedulesConfig } from './config.js';
 import { listScheduledJobs } from './db/index.js';
 import { loadAllPlugins, onFileEvent, onTask } from './plugins/index.js';
 import { fireWebhooks } from './webhooks.js';
-import { registerBuiltInTools } from './agent/tools.js';
+import { registerBuiltInTools, refreshSpecTools } from './agent/tools.js';
+import { loadAndRegisterMcpTools } from './mcp/client.js';
 import { startSkillsWatcher } from './agent/skills-watcher.js';
 import { ensureOllamaInstalled } from './ollama-setup.js';
 import { getOrCreateAgentSession } from './db/index.js';
@@ -138,6 +139,7 @@ async function main(): Promise<void> {
   process.on('SIGINT', shutdown);
 
   await loadAllPlugins();
+  await loadAndRegisterMcpTools();
 
   setEventCallback((payload) => {
     onFileEvent(payload);
@@ -148,7 +150,10 @@ async function main(): Promise<void> {
   const automationFolders = getWatchFoldersFromAutomations();
   const allWatchFolders = [...new Set([...config.watchFolders, ...automationFolders])];
   startWatcher(allWatchFolders.length ? allWatchFolders : null);
-  startSkillsWatcher(config, (ev) => broadcast(ev));
+  startSkillsWatcher(config, (ev) => {
+    refreshSpecTools(config);
+    broadcast(ev);
+  });
 
   const taskHandler = async (task: {
     id: string;
