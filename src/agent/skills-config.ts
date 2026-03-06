@@ -203,18 +203,29 @@ export function getOnboardingComplete(): boolean {
   if (full.onboardingComplete === false) return false;
   // Empty config (no onboardingComplete, no meaningful content) = onboarding not finished → show onboarding
   if (isConfigEmpty(full)) {
-    // Migration: existing users with API keys in ~/.sulala/.env are considered onboarded
+    // Migration: existing users with at least one AI provider key in ~/.sulala/.env are considered onboarded.
+    // Do not treat default .env (PORT, HOST, DB_PATH only) as complete — they must have set an API key.
+    const AI_KEYS_FOR_MIGRATION = new Set([
+      'OPENAI_API_KEY',
+      'OPENROUTER_API_KEY',
+      'ANTHROPIC_API_KEY',
+      'GOOGLE_GEMINI_API_KEY',
+      'GEMINI_API_KEY',
+    ]);
     const envPath = join(homedir(), '.sulala', '.env');
     if (existsSync(envPath)) {
       try {
         const content = readFileSync(envPath, 'utf8');
-        const hasKey = content.split('\n').some((line) => {
+        const hasAiKey = content.split('\n').some((line) => {
           const t = line.trim();
           if (!t || t.startsWith('#')) return false;
           const eq = t.indexOf('=');
-          return eq > 0 && t.slice(eq + 1).trim().length > 0;
+          if (eq <= 0) return false;
+          const key = t.slice(0, eq).trim();
+          const value = t.slice(eq + 1).trim().replace(/^["']|["']$/g, '');
+          return AI_KEYS_FOR_MIGRATION.has(key) && value.length > 0;
         });
-        if (hasKey) return true;
+        if (hasAiKey) return true;
       } catch {
         /* ignore */
       }

@@ -96,7 +96,7 @@ export function IntegrationsPage({
             </Badge>
           </div>
           <p className="text-muted-foreground text-sm">
-            Connect and disconnect apps here. Your agent uses <code className="rounded bg-muted px-1">PORTAL_API_KEY</code> or OAuth to access them.
+            Connect and disconnect apps here—no API keys to set up per app; use OAuth to connect. Your agent uses <code className="rounded bg-muted px-1">PORTAL_API_KEY</code> or OAuth to access them.
           </p>
         </div>
         <p className="text-muted-foreground text-xs">
@@ -158,8 +158,7 @@ export function IntegrationsPage({
         <div className="border-destructive/50 bg-destructive/5 flex flex-col gap-3 rounded-lg border p-4 text-sm">
           <p className="font-medium">Could not reach the integrations service</p>
           <p className="text-muted-foreground text-xs">
-            Set <code className="rounded bg-muted px-1">INTEGRATIONS_URL</code> in the agent .env (e.g. http://localhost:1717) and run the
-            integrations service (<code className="rounded bg-muted px-1">cd integrations && npm run dev</code>), or configure Portal in <strong>Settings → Portal</strong>.
+            Configure <strong>Settings → Portal</strong> (recommended), or set <code className="rounded bg-muted px-1">INTEGRATIONS_URL</code> in the agent .env and run the integrations service.
           </p>
           <Button variant="secondary" size="sm" onClick={() => load()}>
             Retry
@@ -180,7 +179,7 @@ export function IntegrationsPage({
           </Badge>
         </div>
         <p className="text-muted-foreground text-sm">
-          Connect your favorite apps. The agent uses these via connectionId — no secrets in skills.
+          Connect your favorite apps—no API keys to set up per app; connect with one click. The agent uses these via connectionId; no secrets in skills.
         </p>
       </div>
 
@@ -224,6 +223,9 @@ export function IntegrationsPage({
 
   return (
     <div className="flex flex-1 flex-col p-4 min-h-0">
+      <p className="text-muted-foreground mb-2 text-sm">
+        <strong>Connections</strong>: connect apps with one click (no per-app API keys). <strong>MCP Servers</strong>: run and configure your own servers for more control or services not in Connections.
+      </p>
       <Tabs defaultValue="mcp" className="flex flex-1 flex-col min-h-0">
         <TabsList className="w-full max-w-xs grid grid-cols-2 mb-4">
           <TabsTrigger value="mcp" className="flex items-center gap-2">

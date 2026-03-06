@@ -71,7 +71,13 @@ export default function App() {
   }
 
   if (!onboardingComplete) {
-    return <OnboardingFlowWrapper onComplete={() => setOnboardingComplete(true)} />;
+    return (
+      <OnboardingFlowWrapper
+        onComplete={() => {
+          window.location.reload();
+        }}
+      />
+    );
   }
 
   const onNavigate = (p: NavPage) => {
@@ -109,6 +115,7 @@ export default function App() {
           onDeleteSchedule={overview.handleDeleteSchedule}
           onRunSchedule={overview.handleRunSchedule}
           onFetchScheduleRuns={overview.handleFetchScheduleRuns}
+          onNavigateToSettings={() => onNavigate("settings")}
         />
       )}
 

@@ -1,7 +1,11 @@
 import { readFileSync, existsSync, writeFileSync, mkdirSync, chmodSync } from 'fs';
+import { homedir } from 'os';
 import { resolve, relative, dirname, join } from 'path';
 import { spawnSync } from 'child_process';
-import { insertTask, getOrCreateAgentSession } from '../db/index.js';
+import { insertTask, getOrCreateAgentSession, insertScheduledJob, getScheduledJob } from '../db/index.js';
+import { scheduleCronById } from '../scheduler/cron.js';
+import { parseJobFromMessage } from './job-parse.js';
+import { getEffectiveTelegramConfig } from '../channels/telegram.js';
 import { config, getPortalGatewayBase, getEffectivePortalApiKey } from '../config.js';
 import { registerSpecTools } from './tool/spec-loader.js';
 import {
@@ -57,6 +61,9 @@ const WRITE_TOOL_NAMES = new Set([
   'write_file',
   'run_command',
   'register_automation',
+  'create_scheduled_job',
+  'add_mcp_server',
+  'list_mcp_servers',
 ]);
 
 export interface ListToolsOptions {
@@ -125,8 +132,8 @@ const PROFILE_TOOLS: Record<string, Set<string>> = {
     'run_task',
     'run_command',
     'list_integrations_connections',
+    'list_mcp_servers',
     'get_connection_token',
-    'bluesky_post',
     'write_memory',
     'read_memory',
   ]),
@@ -136,8 +143,8 @@ const PROFILE_TOOLS: Record<string, Set<string>> = {
     'write_file',
     'run_command',
     'list_integrations_connections',
+    'list_mcp_servers',
     'get_connection_token',
-    'bluesky_post',
     'write_memory',
     'read_memory',
   ]),
@@ -361,7 +368,8 @@ export function registerBuiltInTools(enqueueTask: (taskId: string) => void): voi
     const workspaceSkillsDir = config.skillsWorkspaceDir ? resolve(config.skillsWorkspaceDir) : null;
     const workspaceSkillsMyDir = config.skillsWorkspaceMyDir ? resolve(config.skillsWorkspaceMyDir) : null;
     const sulalaHomeDir = config.workspaceDir ? resolve(config.workspaceDir, '..') : null;
-    const allowedReadRoots = [workspaceRoot, workspaceDirResolved, workspaceSkillsDir, workspaceSkillsMyDir, sulalaHomeDir].filter(Boolean) as string[];
+    const mcpServersDir = join(homedir(), '.sulala', 'mcp-servers');
+    const allowedReadRoots = [workspaceRoot, workspaceDirResolved, workspaceSkillsDir, workspaceSkillsMyDir, sulalaHomeDir, mcpServersDir].filter(Boolean) as string[];
     const defaultRoot = workspaceRoot ?? workspaceDirResolved ?? process.cwd();
     registerTool({
       name: 'read_file',
@@ -377,7 +385,9 @@ export function registerBuiltInTools(enqueueTask: (taskId: string) => void): voi
       execute: (args) => {
         const rawPath = (args.path as string) || '';
         if (!rawPath.trim()) return { error: 'path is required' };
-        const trimmed = rawPath.trim();
+        let trimmed = rawPath.trim();
+        if (trimmed.startsWith('~/') || trimmed.startsWith('～/')) trimmed = join(homedir(), trimmed.slice(2));
+        else if (trimmed === '~' || trimmed === '～') trimmed = homedir();
         const requested = trimmed.startsWith('/') ? resolve(trimmed) : resolve(defaultRoot, trimmed);
         const insideAllowed = allowedReadRoots.some(
           (root) => requested === root || relative(root, requested).startsWith('..') === false
@@ -394,10 +404,10 @@ export function registerBuiltInTools(enqueueTask: (taskId: string) => void): voi
         }
       },
     });
-    const allowedWriteRoots = [workspaceRoot, workspaceDirResolved, workspaceSkillsDir, workspaceSkillsMyDir].filter(Boolean) as string[];
+    const allowedWriteRoots = [workspaceRoot, workspaceDirResolved, workspaceSkillsDir, workspaceSkillsMyDir, mcpServersDir].filter(Boolean) as string[];
     registerTool({
       name: 'write_file',
-      description: 'Write content to a file. Use for scripts in workspace/scripts/, credentials in workspace/.env, or skills you create in workspace/skills/my/<slug>/README.md. Path can be relative to workspace root or absolute.',
+      description: 'Write content to a file. Use for: workspace scripts (workspace/scripts/), .env (workspace/.env), skills (workspace/skills/my/<slug>/), or AI-generated MCP servers under ~/.sulala/mcp-servers/<name>/ (package.json, index.ts). Path can be relative to workspace root or absolute.',
       profile: 'coding',
       parameters: {
         type: 'object',
@@ -412,13 +422,15 @@ export function registerBuiltInTools(enqueueTask: (taskId: string) => void): voi
         const content = args.content;
         if (!rawPath.trim()) return { error: 'path is required' };
         if (content === undefined || content === null) return { error: 'content is required' };
-        const trimmed = rawPath.trim();
+        let trimmed = rawPath.trim();
+        if (trimmed.startsWith('~/') || trimmed.startsWith('～/')) trimmed = join(homedir(), trimmed.slice(2));
+        else if (trimmed === '~' || trimmed === '～') trimmed = homedir();
         const requested = trimmed.startsWith('/') ? resolve(trimmed) : resolve(defaultRoot, trimmed);
         const insideAllowed = allowedWriteRoots.some(
           (root) => requested === root || relative(root, requested).startsWith('..') === false
         );
         if (!insideAllowed) {
-          return { error: 'path must be inside the workspace, workspace dir (scripts/.env), or skills dir' };
+          return { error: 'path must be inside the workspace, workspace dir (scripts/.env), skills dir, or ~/.sulala/mcp-servers/' };
         }
         try {
           const dir = dirname(requested);
@@ -611,7 +623,7 @@ export function registerBuiltInTools(enqueueTask: (taskId: string) => void): voi
   registerTool({
     name: 'list_integrations_connections',
     description:
-      'OAuth integrations only (calendar, gmail, drive, docs, sheets, slides, github, slack, notion, linear, zoom, trello, twitter, microsoft, zendesk, youtube). Returns connection_id and provider. Do NOT use for Stripe or Discord—for Stripe customers use stripe_list_customers; for Discord use discord_list_guilds / discord_send_message. Requires PORTAL_GATEWAY_URL + PORTAL_API_KEY or INTEGRATIONS_URL.',
+      'OAuth integrations only (calendar, gmail, drive, docs, sheets, slides, github, slack, notion, linear, zoom, trello, twitter, microsoft, zendesk, youtube). Returns connection_id and provider. Do NOT call if a matching mcp_* tool exists (e.g. mcp_bluesky_*, mcp_twitter_*, mcp_gmail_*)—use the MCP tool directly; it works without Portal. Call only when you need connection_id for integration tools (bluesky_post, x_post, etc.) and no mcp_* alternative exists. Do NOT use for Stripe or Discord—for Stripe use stripe_list_customers; for Discord use discord_list_guilds / discord_send_message. Requires PORTAL_GATEWAY_URL + PORTAL_API_KEY or INTEGRATIONS_URL.',
     profile: 'full',
     parameters: {
       type: 'object',
@@ -655,7 +667,11 @@ export function registerBuiltInTools(enqueueTask: (taskId: string) => void): voi
       }
 
       const base = config.integrationsUrl?.replace(/\/$/, '');
-      if (!base) return { error: 'Set PORTAL_GATEWAY_URL + PORTAL_API_KEY (from Portal → API Keys) or INTEGRATIONS_URL' };
+      if (!base)
+        return {
+          error:
+            'Set PORTAL_GATEWAY_URL + PORTAL_API_KEY (from Portal → API Keys) or INTEGRATIONS_URL. If you have mcp_* tools (e.g. mcp_gmail_*, mcp_bluesky_*, mcp_twitter_*), use those instead—they work without Portal.',
+        };
       const q = provider ? `?provider=${encodeURIComponent(provider)}` : '';
       try {
         const res = await fetch(`${base}/connections${q}`);
@@ -672,6 +688,66 @@ export function registerBuiltInTools(enqueueTask: (taskId: string) => void): voi
         return {
           connections: filtered.map((c) => ({ id: c.connection_id, provider: c.provider })),
           count: filtered.length,
+        };
+      } catch (e) {
+        return { error: (e as Error).message };
+      }
+    },
+  });
+
+  /** Create a scheduled job from a natural-language description. Use when the user confirms they want to create a job (after you suggested it). */
+  registerTool({
+    name: 'create_scheduled_job',
+    description:
+      'Create a scheduled job from a short natural-language description. Use ONLY after the user has agreed to create a job (e.g. said "yes", "please do", "create it"). The description should include what to do and when (e.g. "Fetch daily news and post one to Bluesky every morning at 9", "Send me weather every weekday at 8 AM"). Do not use for one-off tasks—only for recurring/scheduled automation.',
+    profile: 'full',
+    parameters: {
+      type: 'object',
+      properties: {
+        description: {
+          type: 'string',
+          description: 'Natural-language description of the job including the schedule (e.g. "Post a tip to Bluesky every 12 hours", "Remind me to backup every Monday at 9 AM").',
+        },
+      },
+      required: ['description'],
+    },
+    execute: async (args) => {
+      const description = typeof args.description === 'string' ? args.description.trim() : '';
+      if (!description) return { error: 'description is required' };
+      try {
+        const parsed = await parseJobFromMessage(description);
+        const id = `job_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+        const delivery = [{ channel: 'telegram', target: 'default' }];
+        insertScheduledJob({
+          id,
+          name: parsed.name,
+          cron_expression: parsed.cron_expression,
+          task_type: 'agent_job',
+          prompt: parsed.prompt,
+          delivery: JSON.stringify(delivery),
+          enabled: 1,
+        });
+        const agentPayload = {
+          jobId: id,
+          name: parsed.name,
+          prompt: parsed.prompt,
+          delivery,
+        };
+        scheduleCronById(id, parsed.cron_expression, 'agent_job', agentPayload);
+        const row = getScheduledJob(id);
+        const telegramConfig = getEffectiveTelegramConfig();
+        const telegramConfigured = !!telegramConfig.botToken?.trim();
+        let message = `Created scheduled job "${parsed.name}". It will run on schedule; the user can see it in Dashboard → Jobs.`;
+        if (!telegramConfigured) {
+          message += ' To receive notifications when the job runs, ask the user to set up the Telegram channel in Settings → Channels.';
+        }
+        return {
+          ok: true,
+          jobId: id,
+          name: row?.name ?? parsed.name,
+          prompt: parsed.prompt,
+          schedule: parsed.cron_expression,
+          message,
         };
       } catch (e) {
         return { error: (e as Error).message };

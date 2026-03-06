@@ -10,17 +10,15 @@ function parseModelSizeBytes(sizeStr: string): number | null {
   if (unit === "MB") return Math.round(val * 1024 * 1024);
   return null;
 }
-import { ChevronRight, Check, Copy, Cpu, HardDrive, Zap } from "lucide-react";
+import { ChevronRight, Check, Cpu, HardDrive, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Checkbox } from "@/components/ui/checkbox";
-import { useEffect, useState } from "react";
 import { useOnboarding, PROVIDERS, PROVIDER_ENV_KEYS } from "../hooks/useOnboarding";
 import type { RecommendedOllamaModel } from "@/lib/api";
-import { putOnboardEnv, fetchConfig } from "@/lib/api";
 
 const OnboardingContext = createContext<ReturnType<typeof useOnboarding> | null>(null);
 function useOnboardingContext() {
@@ -93,17 +91,24 @@ function Step1ProviderSelection() {
               disabled={p.id === "ollama" && !!ollamaDisabled}
             />
             <div className="flex-1">
-              <div className="font-medium">
-                {p.label}
-                {"recommended" in p && p.recommended && (
-                  <span className="text-emerald-600 dark:text-emerald-400 ml-2 text-xs">(Recommended)</span>
-                )}
-                {p.id === "ollama" && ollamaDisabled && (
-                  <span className="text-amber-600 dark:text-amber-400 ml-2 text-xs">(Not recommended)</span>
-                )}
-              </div>
+              <div className="font-medium">{p.label}</div>
+              {p.id === "ollama" && ollamaDisabled && (
+                <div className="text-amber-600 dark:text-amber-400 mt-0.5 text-xs">Not available on this system</div>
+              )}
               {p.envKey && (
-                <div className="text-muted-foreground text-xs">Requires API key</div>
+                <div className="text-muted-foreground mt-0.5 flex flex-wrap items-center gap-x-2 text-xs">
+                  <span>Requires API key</span>
+                  {"apiKeyUrl" in p && typeof p.apiKeyUrl === "string" && (
+                    <a
+                      href={p.apiKeyUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      Get API key →
+                    </a>
+                  )}
+                </div>
               )}
             </div>
           </label>
@@ -139,6 +144,12 @@ function Step2ProviderConfig() {
     GEMINI_API_KEY: "Gemini API Key (alt)",
     OPENROUTER_API_KEY: "OpenRouter API Key",
   };
+  const keyUrls: Record<string, string> = {};
+  PROVIDERS.forEach((p) => {
+    if (p.envKey && "apiKeyUrl" in p && typeof (p as { apiKeyUrl?: string }).apiKeyUrl === "string") {
+      keyUrls[p.envKey] = (p as { apiKeyUrl: string }).apiKeyUrl;
+    }
+  });
   const providerKeys = cloudProviders.flatMap((p) => {
     const k = PROVIDER_ENV_KEYS[p];
     return k ? [k] : [];
@@ -159,7 +170,19 @@ function Step2ProviderConfig() {
           <div className="grid gap-4">
             {providerKeys.map((key) => (
               <div key={key} className="space-y-2">
-                <Label htmlFor={key}>{keyLabels[key] ?? key}</Label>
+                <div className="flex flex-wrap items-center gap-x-2">
+                  <Label htmlFor={key}>{keyLabels[key] ?? key}</Label>
+                  {keyUrls[key] && (
+                    <a
+                      href={keyUrls[key]}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary text-xs hover:underline"
+                    >
+                      Get API key →
+                    </a>
+                  )}
+                </div>
                 <Input
                   id={key}
                   type="password"

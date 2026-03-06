@@ -18,11 +18,11 @@ import {
 } from "@/lib/api";
 
 export const PROVIDERS = [
-  { id: "openrouter", label: "OpenRouter", envKey: "OPENROUTER_API_KEY", recommended: true as const },
-  { id: "ollama", label: "Ollama (Local – No API Key Required)", envKey: null },
-  { id: "openai", label: "OpenAI", envKey: "OPENAI_API_KEY" },
-  { id: "anthropic", label: "Anthropic (Claude)", envKey: "ANTHROPIC_API_KEY" },
-  { id: "google", label: "Google / Gemini", envKey: "GOOGLE_GEMINI_API_KEY" },
+  { id: "openrouter", label: "OpenRouter", envKey: "OPENROUTER_API_KEY", apiKeyUrl: "https://openrouter.ai/keys" },
+  { id: "ollama", label: "Ollama (Local – No API Key Required)", envKey: null, apiKeyUrl: null },
+  { id: "openai", label: "OpenAI", envKey: "OPENAI_API_KEY", apiKeyUrl: "https://platform.openai.com/api-keys" },
+  { id: "anthropic", label: "Anthropic (Claude)", envKey: "ANTHROPIC_API_KEY", apiKeyUrl: "https://console.anthropic.com/settings/keys" },
+  { id: "google", label: "Google / Gemini", envKey: "GOOGLE_GEMINI_API_KEY", apiKeyUrl: "https://aistudio.google.com/app/apikey" },
 ];
 
 export const PROVIDER_ENV_KEYS: Record<string, string> = {
@@ -57,7 +57,7 @@ export function useOnboarding(onComplete?: () => void) {
     statusLoading: true,
     statusComplete: null,
     step: 0,
-    selectedProviders: ["openrouter"],
+    selectedProviders: [],
     envKeys: {},
     envKeysInput: {},
     recommendedModels: [],

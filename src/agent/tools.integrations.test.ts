@@ -276,9 +276,10 @@ describe("integration tools", () => {
 
       const tool = getTool("list_integrations_connections");
       const result = await (tool!.execute as (args: unknown) => Promise<unknown>)({});
-      expect(result).toEqual({
-        error:
-          "Set PORTAL_GATEWAY_URL + PORTAL_API_KEY (from Portal → API Keys) or INTEGRATIONS_URL",
+      expect(result).toMatchObject({
+        error: expect.stringContaining(
+          "Set PORTAL_GATEWAY_URL + PORTAL_API_KEY (from Portal → API Keys) or INTEGRATIONS_URL"
+        ),
       });
     });
 

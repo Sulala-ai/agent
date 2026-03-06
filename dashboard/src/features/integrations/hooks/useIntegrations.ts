@@ -48,12 +48,23 @@ export function useIntegrations(activePage: string, onError: (msg: string) => vo
         setPortalGatewayUrl(config.portalGatewayUrl ?? null);
         const baseUrl = config.integrationsUrl?.trim() || undefined;
         try {
-          // Prefer provider list from integrations API (single source of truth); fall back to hardcoded apps if unreachable.
+          // Use integrations API list only when INTEGRATIONS_URL is set; otherwise use hardcoded apps (no default localhost:1717).
           let items: IntegrationItem[];
-          try {
-            const { integrations: apiList } = await Promise.race([fetchIntegrations(baseUrl), timeoutPromise]);
-            items = apiList.map((i) => ({ ...i, connections: [] }));
-          } catch {
+          if (baseUrl) {
+            try {
+              const { integrations: apiList } = await Promise.race([fetchIntegrations(baseUrl), timeoutPromise]);
+              items = apiList.map((i) => ({ ...i, connections: [] }));
+            } catch {
+              const allApps = getAllIntegrationApps();
+              items = allApps.map((app) => ({
+                id: app.id,
+                name: app.name,
+                iconUrl: app.logoUrl ?? "",
+                description: app.description,
+                connections: [],
+              }));
+            }
+          } else {
             const allApps = getAllIntegrationApps();
             items = allApps.map((app) => ({
               id: app.id,
@@ -90,10 +101,21 @@ export function useIntegrations(activePage: string, onError: (msg: string) => vo
         setLoading(false);
         return;
       }
-      const baseUrl = config.integrationsUrl ?? undefined;
+      const baseUrl = config.integrationsUrl?.trim() || undefined;
       setIntegrationsBaseUrl(baseUrl);
-      const { integrations: list } = await Promise.race([fetchIntegrations(baseUrl), timeoutPromise]);
-      setIntegrations(list);
+      if (baseUrl) {
+        const { integrations: list } = await Promise.race([fetchIntegrations(baseUrl), timeoutPromise]);
+        setIntegrations(list);
+      } else {
+        setIntegrations(getAllIntegrationApps().map((app) => ({
+          id: app.id,
+          name: app.name,
+          iconUrl: app.logoUrl ?? "",
+          description: app.description,
+          connections: [],
+          tokenOnly: app.tokenOnly,
+        })));
+      }
     } catch (e) {
       onError((e as Error).message);
       setIntegrations([]);

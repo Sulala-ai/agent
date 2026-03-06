@@ -13,18 +13,13 @@ export function AutomationSuggestionsBar({
   onMissingIntegrations,
 }: AutomationSuggestionsBarProps) {
   const handleClick = (idea: AutomationIdea) => {
-    const missing = idea.required_integrations.filter((k) => !connectedIds.includes(k));
-    if (missing.length === 0) {
-      onSelectIdea(idea);
-    } else {
-      onMissingIntegrations(idea);
-    }
+    onSelectIdea(idea);
   };
 
   return (
     <div className="flex flex-col gap-1.5">
       <p className="text-muted-foreground text-xs font-medium">Automation ideas</p>
-      <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin">
+      <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin w-3/4">
         {AUTOMATION_IDEAS.map((idea) => (
           <button
             key={idea.id}

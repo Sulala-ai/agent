@@ -4,8 +4,8 @@ const GATEWAY_URL =
 
 /** Optional: fetch hub registry from this URL (e.g. http://localhost:3002 for local store). If set, From Hub tab uses this; install requests pass it to the gateway. */
 const HUB_REGISTRY_URL = (import.meta.env.VITE_SKILLS_REGISTRY_URL as string)?.trim?.() || null;
-/** Integrations service (OAuth connections). Fallback when agent config does not provide integrationsUrl. */
-const DEFAULT_INTEGRATIONS_URL = (import.meta.env.VITE_INTEGRATIONS_URL as string)?.trim?.() || "http://localhost:1717";
+/** Integrations service URL only when explicitly set (env or agent config). No default to avoid hitting localhost:1717. */
+const DEFAULT_INTEGRATIONS_URL = (import.meta.env.VITE_INTEGRATIONS_URL as string)?.trim?.() || null;
 const API_KEY = import.meta.env.VITE_GATEWAY_API_KEY || "";
 
 function headers(extra: HeadersInit = {}): HeadersInit {
@@ -88,6 +88,29 @@ export async function createSchedule(body: {
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { error?: string }).error || `Create schedule failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export type ParseJobResult = {
+  prompt: string;
+  cron_expression: string;
+  name: string;
+};
+
+export async function fetchParseJobPrompt(body: {
+  message: string;
+  provider?: string | null;
+  model?: string | null;
+}): Promise<ParseJobResult> {
+  const res = await fetch(`${GATEWAY_URL}/api/jobs/parse`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || `Parse failed: ${res.status}`);
   }
   return res.json();
 }
@@ -456,14 +479,16 @@ export type IntegrationItem = {
   tokenOnly?: boolean;
 };
 
-/** Base URL for integrations API. Prefer from agent config (fetchConfig().integrationsUrl) so agent .env is single source. */
-function getIntegrationsBaseUrl(override?: string | null): string {
-  return (override?.trim() || DEFAULT_INTEGRATIONS_URL).replace(/\/$/, "");
+/** Base URL for integrations API when set (agent config or VITE_*). Returns null when none set — do not call integrations service. */
+function getIntegrationsBaseUrl(override?: string | null): string | null {
+  const url = override?.trim() || DEFAULT_INTEGRATIONS_URL;
+  return url ? url.replace(/\/$/, "") : null;
 }
 
-/** Fetch full integrations list (providers + connections). No merge needed. */
+/** Fetch full integrations list (providers + connections). No merge needed. Requires baseUrl or VITE_INTEGRATIONS_URL. */
 export async function fetchIntegrations(baseUrl?: string | null): Promise<{ integrations: IntegrationItem[] }> {
   const base = getIntegrationsBaseUrl(baseUrl);
+  if (!base) throw new Error("Integrations URL not configured. Set INTEGRATIONS_URL in the agent .env or configure Portal in Settings.");
   const res = await fetch(`${base}/integrations`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Failed to fetch integrations: ${res.status}`);
   const data = (await res.json()) as { integrations?: unknown[] };
@@ -506,6 +531,7 @@ export async function fetchIntegrationsProviders(baseUrl?: string | null): Promi
   providers: IntegrationProviderMeta[];
 }> {
   const base = getIntegrationsBaseUrl(baseUrl);
+  if (!base) throw new Error("Integrations URL not configured.");
   const res = await fetch(`${base}/providers`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Failed to fetch providers: ${res.status}`);
   const data = (await res.json()) as { providers?: unknown[] };
@@ -526,6 +552,7 @@ export async function fetchIntegrationsConnections(
   baseUrl?: string | null
 ): Promise<{ connections: IntegrationConnection[] }> {
   const base = getIntegrationsBaseUrl(baseUrl);
+  if (!base) throw new Error("Integrations URL not configured.");
   const q = provider ? `?provider=${encodeURIComponent(provider)}` : "";
   const res = await fetch(`${base}/connections${q}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Failed to fetch connections: ${res.status}`);
@@ -538,6 +565,7 @@ export async function startIntegrationsConnect(
   baseUrl?: string | null
 ): Promise<{ authUrl: string; state: string; connectionId: string }> {
   const base = getIntegrationsBaseUrl(baseUrl);
+  if (!base) throw new Error("Integrations URL not configured. Set INTEGRATIONS_URL or use Portal in Settings.");
   const res = await fetch(`${base}/connect/${encodeURIComponent(provider)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -552,6 +580,7 @@ export async function startIntegrationsConnect(
 
 export async function deleteIntegrationsConnection(id: string, baseUrl?: string | null): Promise<{ ok: boolean }> {
   const base = getIntegrationsBaseUrl(baseUrl);
+  if (!base) throw new Error("Integrations URL not configured.");
   const res = await fetch(`${base}/connections/${encodeURIComponent(id)}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`Failed to disconnect: ${res.status}`);
   return res.json();
@@ -569,6 +598,10 @@ export type McpServerEntry = {
   command: string;
   args?: string[];
   env?: Record<string, string>;
+  /** Optional icon: Simple Icons slug (e.g. github) or image URL. */
+  icon?: string;
+  /** Optional URL to docs on where to get API keys / credentials. Shown as "Get API keys" in UI. */
+  credentialsUrl?: string;
 };
 
 export async function fetchMcpConfig(): Promise<{ servers: McpServerEntry[] }> {
@@ -589,6 +622,20 @@ export async function updateMcpConfig(servers: McpServerEntry[]): Promise<{ serv
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { error?: string }).error || `Failed to save MCP config: ${res.status}`);
+  }
+  return res.json();
+}
+
+/** Start an AI job to find or build an MCP server and add it. Returns taskId and message. */
+export async function buildMcpServerWithAi(description: string): Promise<{ taskId: string; message: string }> {
+  const res = await fetch(`${GATEWAY_URL}/api/mcp/build-with-ai`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ description: description.trim() }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || `Failed to start build: ${res.status}`);
   }
   return res.json();
 }

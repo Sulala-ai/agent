@@ -33,7 +33,7 @@ export function AppLayout({ activePage, onNavigate, error, children }: AppLayout
             {theme === "dark" ? "Light" : "Dark"}
           </Button>
         </header>
-        <div className="flex flex-1 flex-col gap-4 p-4 md:p-6">
+        <div className="flex flex-1 flex-col gap-4 p-4 md:p-6 w-full">
           {error && (
             <div className="rounded-md border border-destructive/50 bg-destructive/10 px-4 py-2 text-sm text-destructive">
               {error}

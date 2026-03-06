@@ -30,6 +30,12 @@ import { formatChatTs } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { useChat } from "../hooks/useChat";
 import type { AgentMessage, IntegrationItem } from "@/lib/api";
+
+/** Detect when the agent is asking the job creation yes/no question. */
+function isJobCreationYesNoQuestion(content: string | null | undefined): boolean {
+  const c = content ?? "";
+  return /would you like me to create (a )?job for you/i.test(c);
+}
 import { getConnectedIntegrations } from "@/features/integrations/lib";
 import { AutomationSuggestionsBar } from "../components/AutomationSuggestionsBar";
 import { MissingIntegrationsModal } from "../components/MissingIntegrationsModal";
@@ -259,7 +265,7 @@ function ChatMessage({
 
 export function ChatPage(props: ChatPageProps) {
   const {
-    config,
+    configuredProviders = [],
     chatMessages,
     chatInput,
     setChatInput,
@@ -279,6 +285,7 @@ export function ChatPage(props: ChatPageProps) {
     checkOllama,
     handleSelectSession,
     handleChatSend,
+    sendMessage,
     handleNewChat,
     pendingActionId,
     pendingActionDetails,
@@ -330,12 +337,7 @@ export function ChatPage(props: ChatPageProps) {
       : "Chat history";
 
   const handleIdeaPick = (idea: AutomationIdea) => {
-    const missing = idea.required_integrations.filter((k) => !connectedIds.includes(k));
-    if (missing.length === 0) {
-      handleSelectIdea(idea);
-    } else {
-      handleMissingIntegrations(idea);
-    }
+    handleSelectIdea(idea);
   };
 
   const showOllamaBanner = chatProvider === "ollama" && ollamaRunning === false && !ollamaStatusLoading;
@@ -359,15 +361,18 @@ export function ChatPage(props: ChatPageProps) {
                 Try an idea
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-[220px]">
+            <DropdownMenuContent
+              align="end"
+              className="min-w-[220px] max-w-[min(300px,calc(100vw-2rem))] max-h-[70vh] overflow-y-auto overflow-x-hidden"
+            >
               {AUTOMATION_IDEAS.map((idea) => (
                 <DropdownMenuItem
                   key={idea.id}
                   onClick={() => handleIdeaPick(idea)}
-                  className="flex flex-col items-start gap-0.5 py-2"
+                  className="flex min-w-0 flex-col items-start gap-0.5 py-2"
                 >
-                  <span className="font-medium">{idea.title}</span>
-                  <span className="text-muted-foreground text-xs font-normal">
+                  <span className="truncate font-medium w-full">{idea.title}</span>
+                  <span className="text-muted-foreground line-clamp-2 text-xs font-normal w-full min-w-0">
                     {idea.description}
                   </span>
                 </DropdownMenuItem>
@@ -488,14 +493,16 @@ export function ChatPage(props: ChatPageProps) {
             onChange={(e) => {
               const v = e.target.value;
               setChatProvider(v);
-              const p = config?.aiProviders.find((x) => x.id === v);
+              const p = configuredProviders.find((x) => x.id === v);
               setChatModel(p?.defaultModel || "");
             }}
           >
-            {(!chatProvider || !config?.aiProviders?.some((p) => p.id === chatProvider)) && (
-              <option value="">Select provider</option>
+            {(configuredProviders.length === 0 || !chatProvider || !configuredProviders.some((p) => p.id === chatProvider)) && (
+              <option value="">
+                {configuredProviders.length === 0 ? "No provider configured" : "Select provider"}
+              </option>
             )}
-            {(config?.aiProviders ?? []).map((p) => (
+            {configuredProviders.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.label}
               </option>
@@ -536,6 +543,23 @@ export function ChatPage(props: ChatPageProps) {
                 isStreaming={chatLoading && i === chatMessages.length - 1}
               />
             ))}
+            {!chatLoading &&
+              !pendingActionId &&
+              chatMessages.length > 0 &&
+              chatMessages[chatMessages.length - 1]?.role === "assistant" &&
+              isJobCreationYesNoQuestion(chatMessages[chatMessages.length - 1]?.content) && (
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
+                <span className="text-muted-foreground text-sm">Reply:</span>
+                <Button size="sm" onClick={() => sendMessage("yes")}>
+                  <Check className="size-3.5" />
+                  Yes, create it
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => sendMessage("no")}>
+                  <X className="size-3.5" />
+                  No, don&apos;t create
+                </Button>
+              </div>
+            )}
             {pendingActionId && (
               <Card className="border-amber-500/50 bg-amber-500/5">
                 <CardHeader className="pb-2">
@@ -592,13 +616,7 @@ export function ChatPage(props: ChatPageProps) {
             )}
           </div>
         </ScrollArea>
-        {showSuggestionsBar && (
-          <AutomationSuggestionsBar
-            connectedIds={connectedIds}
-            onSelectIdea={handleSelectIdea}
-            onMissingIntegrations={handleMissingIntegrations}
-          />
-        )}
+       
         {chatAttachments.length > 0 && (
           <div className="border-border flex flex-wrap gap-2 rounded-md border p-2">
             {chatAttachments.map((file, i) => (

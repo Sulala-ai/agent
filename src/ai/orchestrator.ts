@@ -1,15 +1,38 @@
-import { log, saveAiResult } from '../db/index.js';
+import { log, saveAiResult, getChannelConfig } from '../db/index.js';
 import { getSulalaEnvKey } from '../config.js';
 import type { AIAdapter, CompleteOptions } from '../types.js';
 
 const providers = new Map<string, AIAdapter>();
+
+/** Resolve default provider: Settings job default → AI_DEFAULT_PROVIDER → OpenRouter/OpenAI if key set. Never returns Ollama unless user chose it. */
+function getDefaultProvider(): string | null {
+  try {
+    const raw = getChannelConfig('job_default');
+    if (raw?.trim()) {
+      const o = JSON.parse(raw) as { defaultProvider?: string };
+      if (o.defaultProvider?.trim()) return o.defaultProvider.trim();
+    }
+  } catch {
+    // ignore
+  }
+  const env = (process.env.AI_DEFAULT_PROVIDER || '').trim();
+  if (env) return env;
+  if ((getSulalaEnvKey('OPENROUTER_API_KEY') || '').trim()) return 'openrouter';
+  if ((getSulalaEnvKey('OPENAI_API_KEY') || '').trim()) return 'openai';
+  return null;
+}
 
 export function registerProvider(name: string, adapter: AIAdapter): void {
   providers.set(name, adapter);
 }
 
 export function getProvider(name?: string | null): AIAdapter {
-  const key = name ?? process.env.AI_DEFAULT_PROVIDER ?? 'ollama';
+  const key = name ?? getDefaultProvider();
+  if (!key) {
+    throw new Error(
+      'No AI provider configured. Set Job default in Settings → AI Providers, or set AI_DEFAULT_PROVIDER and add OPENROUTER_API_KEY or OPENAI_API_KEY.'
+    );
+  }
   const p = providers.get(key);
   if (!p) throw new Error(`Unknown AI provider: ${key}. Registered: ${[...providers.keys()].join(', ')}`);
   return p;
@@ -47,7 +70,12 @@ export async function completeStream(
   options: CompleteOptions,
   onChunk: (ev: StreamChunkEvent) => void
 ): Promise<{ content: string; tool_calls?: Array<{ id: string; name: string; arguments: string }>; usage?: Record<string, number> }> {
-  const provider = options.provider ?? process.env.AI_DEFAULT_PROVIDER ?? 'ollama';
+  const provider = options.provider ?? getDefaultProvider();
+  if (!provider) {
+    throw new Error(
+      'No AI provider configured. Set Job default in Settings → AI Providers, or set AI_DEFAULT_PROVIDER and add OPENROUTER_API_KEY or OPENAI_API_KEY.'
+    );
+  }
   const messages = options.messages ?? [];
   const model = options.model;
   const max_tokens = options.max_tokens ?? 1024;
@@ -293,7 +321,7 @@ export async function complete(options: CompleteOptions = {}): Promise<{
   tool_calls?: Array<{ id: string; name: string; arguments: string }>;
 }> {
   const {
-    provider = process.env.AI_DEFAULT_PROVIDER ?? 'ollama',
+    provider: optionProvider,
     model,
     messages,
     max_tokens = 1024,
@@ -301,6 +329,12 @@ export async function complete(options: CompleteOptions = {}): Promise<{
     tools,
     signal,
   } = options;
+  const provider = optionProvider ?? getDefaultProvider();
+  if (!provider) {
+    throw new Error(
+      'No AI provider configured. Set Job default in Settings → AI Providers, or set AI_DEFAULT_PROVIDER and add OPENROUTER_API_KEY or OPENAI_API_KEY.'
+    );
+  }
   const start = Date.now();
   const adapter = getProvider(provider);
   const id = `ai_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;

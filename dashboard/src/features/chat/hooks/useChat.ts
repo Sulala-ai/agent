@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   fetchConfig,
+  fetchOnboardEnv,
   fetchAgentModels,
   fetchAgentSessions,
   fetchAgentSessionCreate,
@@ -13,6 +14,7 @@ import {
   rejectPendingAction,
   fetchOllamaStatus,
   fetchOllamaPullStatus,
+  fetchJobDefault,
   type Config,
   type CompleteMessage,
   type AgentModel,
@@ -25,6 +27,27 @@ import type { AutomationIdea } from "../types/automationIdeas";
 
 const STORAGE_KEY_PROVIDER = "sulala_chat_provider";
 const STORAGE_KEY_MODEL = "sulala_chat_model";
+
+/** Provider id (from config) -> env key(s) that must be set for the provider to be "configured". */
+const PROVIDER_CONFIG_KEYS: Record<string, string | string[]> = {
+  openai: "OPENAI_API_KEY",
+  openrouter: "OPENROUTER_API_KEY",
+  claude: "ANTHROPIC_API_KEY",
+  gemini: ["GOOGLE_GEMINI_API_KEY", "GEMINI_API_KEY"],
+  ollama: "", // uses ollamaRunning, not env
+};
+
+function isProviderConfigured(
+  providerId: string,
+  envKeys: Record<string, "set" | "unset">,
+  ollamaRunning: boolean | null
+): boolean {
+  if (providerId === "ollama") return ollamaRunning === true;
+  const keys = PROVIDER_CONFIG_KEYS[providerId];
+  if (!keys) return false;
+  if (Array.isArray(keys)) return keys.some((k) => envKeys[k] === "set");
+  return envKeys[keys] === "set";
+}
 
 function loadStored(key: string): string {
   try {
@@ -46,6 +69,7 @@ export function useChat(
   options?: UseChatOptions
 ) {
   const [config, setConfig] = useState<Config | null>(null);
+  const [envKeys, setEnvKeys] = useState<Record<string, "set" | "unset">>({});
   const [chatMessages, setChatMessages] = useState<AgentMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [chatProvider, setChatProviderState] = useState(() => loadStored(STORAGE_KEY_PROVIDER));
@@ -74,7 +98,7 @@ export function useChat(
   };
 
   useEffect(() => {
-    if (page !== "chat" || chatProvider !== "ollama") {
+    if (page !== "chat") {
       setOllamaRunning(null);
       setOllamaPullState(null);
       return;
@@ -84,10 +108,15 @@ export function useChat(
       .then((s) => setOllamaRunning(s.running))
       .catch(() => setOllamaRunning(false))
       .finally(() => setOllamaStatusLoading(false));
-  }, [page, chatProvider]);
+  }, [page]);
 
   useEffect(() => {
-    if (page !== "chat" || chatProvider !== "ollama") return;
+    if (page !== "chat" && chatProvider !== "ollama") return;
+    if (page !== "chat") {
+      setOllamaPullState(null);
+      return;
+    }
+    if (chatProvider !== "ollama") return;
     const tick = () => {
       fetchOllamaPullStatus()
         .then(setOllamaPullState)
@@ -100,24 +129,53 @@ export function useChat(
 
   useEffect(() => {
     if (page === "chat") {
-      fetchConfig()
-        .then((c) => {
-          setConfig(c);
-          if (c?.aiProviders?.length && !loadStored(STORAGE_KEY_PROVIDER)) {
-            const first = c.aiProviders[0];
-            if (first) {
-              setChatProviderState(first.id);
-              setChatModelState(first.defaultModel || "");
-              try {
-                localStorage.setItem(STORAGE_KEY_PROVIDER, first.id);
-                localStorage.setItem(STORAGE_KEY_MODEL, first.defaultModel || "");
-              } catch {}
-            }
-          }
+      Promise.all([fetchConfig(), fetchOnboardEnv()])
+        .then(([c, env]) => {
+          setConfig(c ?? null);
+          setEnvKeys(env?.keys ?? {});
         })
-        .catch(() => setConfig(null));
+        .catch(() => {
+          setConfig(null);
+          setEnvKeys({});
+        });
     }
   }, [page]);
+
+  const configuredProviders = useMemo(
+    () =>
+      (config?.aiProviders ?? []).filter((p) =>
+        isProviderConfigured(p.id, envKeys, ollamaRunning)
+      ),
+    [config?.aiProviders, envKeys, ollamaRunning]
+  );
+
+  useEffect(() => {
+    if (page !== "chat" || !config?.aiProviders?.length) return;
+    const stored = loadStored(STORAGE_KEY_PROVIDER);
+    const available = configuredProviders;
+    if (available.length === 0) return;
+    const pickProvider = (preferId: string | null) => {
+      const preferred = preferId && available.some((p) => p.id === preferId) ? available.find((p) => p.id === preferId) : null;
+      const fallback = available[0];
+      const chosen = preferred ?? fallback;
+      if (chosen) {
+        setChatProviderState(chosen.id);
+        setChatModelState(chosen.defaultModel || "");
+        try {
+          localStorage.setItem(STORAGE_KEY_PROVIDER, chosen.id);
+          localStorage.setItem(STORAGE_KEY_MODEL, chosen.defaultModel || "");
+        } catch {}
+      }
+    };
+    if (!stored) {
+      fetchJobDefault()
+        .then((jobDef) => pickProvider(jobDef.defaultProvider ?? null))
+        .catch(() => pickProvider(null));
+      return;
+    }
+    const currentInList = available.some((p) => p.id === stored);
+    if (!currentInList) fetchJobDefault().then((jobDef) => pickProvider(jobDef.defaultProvider ?? null)).catch(() => pickProvider(null));
+  }, [page, config, configuredProviders]);
 
   useEffect(() => {
     if (page !== "chat" || (chatProvider !== "openrouter" && chatProvider !== "ollama")) {
@@ -177,11 +235,22 @@ export function useChat(
   const handleChatSend = async () => {
     const text = chatInput.trim();
     if ((!text && chatAttachments.length === 0) || chatLoading) return;
-    const userMessage: CompleteMessage = { role: "user", content: text || "(with attachments)" };
-    setChatMessages((prev) => [...prev, userMessage]);
-    const filesToUpload = [...chatAttachments];
+    const files = [...chatAttachments];
     setChatInput("");
     setChatAttachments([]);
+    await doSendMessage(text || "(with attachments)", files);
+  };
+
+  /** Send a specific message (e.g. "yes" or "no") without using the input field. Used for quick-reply buttons. */
+  const sendMessage = async (message: string) => {
+    const text = (message ?? "").trim();
+    if (!text || chatLoading) return;
+    await doSendMessage(text, []);
+  };
+
+  const doSendMessage = async (text: string, filesToUpload: File[]) => {
+    const userMessage: CompleteMessage = { role: "user", content: text || "(with attachments)" };
+    setChatMessages((prev) => [...prev, userMessage]);
     setChatLoading(true);
     onError(null);
     try {
@@ -405,6 +474,7 @@ export function useChat(
 
   return {
     config,
+    configuredProviders,
     chatMessages,
     chatInput,
     setChatInput,
@@ -425,6 +495,7 @@ export function useChat(
     checkOllama,
     handleSelectSession,
     handleChatSend,
+    sendMessage,
     handleNewChat,
     pendingActionId,
     pendingActionDetails,

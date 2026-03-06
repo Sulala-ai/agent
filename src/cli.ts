@@ -60,6 +60,32 @@ function headers(): Record<string, string> {
   return h;
 }
 
+/** Check if the agent gateway is reachable. */
+async function isGatewayUp(): Promise<boolean> {
+  try {
+    const res = await fetch(`${GATEWAY_URL}/health`, {
+      headers: headers(),
+      signal: AbortSignal.timeout(2000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** If the agent is not running, start the daemon (if installed) and wait for the gateway to be up. Returns true if gateway is reachable. */
+async function ensureAgentStarted(): Promise<boolean> {
+  if (await isGatewayUp()) return true;
+  startDaemon();
+  const maxAttempts = 20;
+  const intervalMs = 500;
+  for (let i = 0; i < maxAttempts; i++) {
+    await new Promise((r) => setTimeout(r, intervalMs));
+    if (await isGatewayUp()) return true;
+  }
+  return false;
+}
+
 async function get(path: string, qs = ''): Promise<unknown> {
   const url = qs ? `${GATEWAY_URL}${path}?${qs}` : `${GATEWAY_URL}${path}`;
   const res = await fetch(url, { headers: headers() });
@@ -299,25 +325,33 @@ Env: GATEWAY_URL, GATEWAY_API_KEY, SULALA_SKILLS_DIR, AGENT_CONTEXT_PATH
   try {
     switch (cmd) {
       case 'status':
+        await ensureAgentStarted();
         await status();
         break;
       case 'doctor':
+        await ensureAgentStarted();
         await doctor();
         break;
       case 'tasks':
+        await ensureAgentStarted();
         await tasks(parseInt(String(opts.limit || '50'), 10));
         break;
       case 'logs':
+        await ensureAgentStarted();
         await logs(parseInt(String(opts.limit || '100'), 10));
         break;
       case 'enqueue':
         if (!opts.type) throw new Error('enqueue requires --type=NAME');
+        await ensureAgentStarted();
         await enqueueTask(String(opts.type), typeof opts.payload === 'string' ? opts.payload : undefined);
         break;
       case 'skill': {
         const sub = args[1] ?? '';
         if (sub === 'list') await skillList();
-        else if (sub === 'check') await skillCheck();
+        else if (sub === 'check') {
+          await ensureAgentStarted();
+          await skillCheck();
+        }
         else if (sub === 'update') await skillUpdate();
         else if (sub === 'install') {
           const fromUrl = typeof opts['from-url'] === 'string' ? opts['from-url'] : undefined;
@@ -362,8 +396,10 @@ Env: GATEWAY_URL, GATEWAY_API_KEY, SULALA_SKILLS_DIR, AGENT_CONTEXT_PATH
             installDaemon();
             await openOnboardPage({ port, delayMs: 2500 });
           } else {
-            await openOnboardPage({ port });
-            console.log('If the agent is not running yet: sulala onboard --install-daemon');
+            const up = await ensureAgentStarted();
+            if (!up) console.log('Starting agent... (run sulala onboard --install-daemon to run at login)');
+            await openOnboardPage({ port, delayMs: up ? 0 : 2000 });
+            if (!up) console.log('If the agent did not start: sulala onboard --install-daemon');
           }
         }
         break;

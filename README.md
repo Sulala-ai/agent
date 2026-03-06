@@ -1,13 +1,15 @@
 # Sulala Agent — Local AI Orchestration Platform
 
-A local-first platform that combines **file monitoring**, **task scheduling**, **AI orchestration**, and a **plugin system**. Runs on `127.0.0.1` and stays on your machine.
+A local-first platform that combines **file monitoring**, **task scheduling**, **AI orchestration**, **MCP (Model Context Protocol)**, and a **plugin system**. Runs on `127.0.0.1` and stays on your machine.
 
 ## Contents
 
 - [Architecture](#architecture-high-level)
 - [Quick start](#quick-start)
 - [Desktop app (Mac & Windows)](#desktop-app-mac--windows)
+- [Integrations vs MCP](#integrations-vs-mcp)
 - [Hub & integrations](#hub--integrations)
+- [MCP (Model Context Protocol)](#mcp-model-context-protocol)
 - [Requirements](#requirements)
 - [Project layout](#project-layout)
 - [Security](#security)
@@ -20,6 +22,7 @@ A local-first platform that combines **file monitoring**, **task scheduling**, *
 | **File watcher** | Real-time folder watch (add/change/delete) → event triggers |
 | **Task scheduler** | Cron-like scheduling + queue with retries and failure handling |
 | **AI orchestration** | Single interface to multiple providers (OpenAI, OpenRouter, Claude, Gemini, Ollama); routing and rate limits |
+| **MCP** | Model Context Protocol servers: connect tools and data sources for the agent (configure in dashboard Settings → MCP) |
 | **Plugins** | Scripts and integrations that hook into events, tasks, and AI |
 | **Persistence** | SQLite for tasks, file state, logs, and AI results |
 
@@ -114,6 +117,15 @@ sulala skill uninstall apple-notes [--global]
 **Onboard & daemon (global install):** Run `sulala onboard` to create `~/.sulala` and a default `.env`; the browser opens to **http://127.0.0.1:2026/onboard** to add API keys (saved to `~/.sulala/.env`). Run `sulala onboard --install-daemon` to install a background service (launchd on macOS, systemd on Linux) so the agent runs at login. Logs: `~/.sulala/logs/`. Use `sulala stop` / `sulala start` to stop or start the daemon; `sulala onboard --uninstall-daemon` to remove it.
 
 **Works on any device:** The published package includes bundled skills (`context/`). Set `SKILLS_REGISTRY_URL` to your hub (e.g. https://hub.sulala.ai/api/sulalahub/registry) to list and install skills via `sulala skill list` / `sulala skill install`.
+
+**Integrations vs MCP**
+
+- **Integrations (Connections)** — For users who don’t want to set up API keys or run extra services. Connect apps (Gmail, Bluesky, Slack, etc.) in the dashboard via OAuth; the agent uses those connections with no per-app secrets to manage.
+- **MCP (Model Context Protocol)** — For users who are fine with an extra setup step. Add MCP servers in **Settings → MCP** (or Integrations → MCP Servers). You run and configure each server (e.g. command, env vars for API keys). Use MCP for more control or for services not offered as Integrations.
+
+**MCP (Model Context Protocol)**
+
+- The agent supports **MCP servers** so the AI can use external tools and data (files, databases, APIs). Add and manage MCP servers in the dashboard under **Settings → MCP** (or Integrations → MCP Servers). Configured servers are available to the agent during chat and tool-use runs.
 
 **Hub & integrations**
 

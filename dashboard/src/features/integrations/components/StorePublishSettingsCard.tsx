@@ -60,7 +60,13 @@ export function StorePublishSettingsCard({
       {loading ? (
         <p className="text-muted-foreground text-xs">Loading…</p>
       ) : (
-        <div className="flex flex-col gap-3">
+        <form
+          className="flex flex-col gap-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            save();
+          }}
+        >
           <div className="space-y-1">
             <Label htmlFor="store-publish-api-key" className="text-xs">
               API key
@@ -76,7 +82,7 @@ export function StorePublishSettingsCard({
             />
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="secondary" size="sm" onClick={save} disabled={saving}>
+            <Button type="submit" variant="secondary" size="sm" disabled={saving}>
               {saving ? "Saving…" : "Save"}
             </Button>
             {createKeyUrl && (
@@ -90,7 +96,7 @@ export function StorePublishSettingsCard({
               </a>
             )}
           </div>
-        </div>
+        </form>
       )}
     </div>
   );

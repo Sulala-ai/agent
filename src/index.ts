@@ -16,7 +16,7 @@ import { listScheduledJobs } from './db/index.js';
 import { loadAllPlugins, onFileEvent, onTask } from './plugins/index.js';
 import { fireWebhooks } from './webhooks.js';
 import { registerBuiltInTools, refreshSpecTools } from './agent/tools.js';
-import { loadAndRegisterMcpTools } from './mcp/client.js';
+import { loadAndRegisterMcpTools, registerAddMcpServerTool, registerListMcpServersTool, registerTestMcpServerTool } from './mcp/client.js';
 import { startSkillsWatcher } from './agent/skills-watcher.js';
 import { ensureOllamaInstalled } from './ollama-setup.js';
 import { getOrCreateAgentSession } from './db/index.js';
@@ -118,6 +118,9 @@ async function main(): Promise<void> {
   log('main', 'info', 'Starting Sulala Agent', { port: config.port });
 
   registerBuiltInTools(enqueue);
+  registerAddMcpServerTool();
+  registerListMcpServersTool();
+  registerTestMcpServerTool();
 
   const app = createGateway();
   (app.locals as AppLocals).enqueueTaskId = enqueue;

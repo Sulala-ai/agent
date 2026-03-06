@@ -1,6 +1,7 @@
 import express, { type Express, type Request, type Response } from 'express';
 import { createServer } from 'http';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'fs';
+import { homedir } from 'os';
 import { join, resolve, sep } from 'path';
 import { randomBytes } from 'crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
@@ -58,8 +59,8 @@ import {
 import { isOllamaReachable, startOllamaServeForApi, runOllamaInstall, setPullProgressCallback, pullOllamaModel } from '../ollama-setup.js';
 import { getSystemCapabilities } from '../system-capabilities.js';
 import { getPackageRoot } from '../onboard.js';
-import { getMcpConfigForDisplay, writeMcpServersConfig, getMcpServersConfig, type McpServerConfig } from '../mcp/config.js';
-import { refreshMcpTools } from '../mcp/client.js';
+import { getMcpConfigForDisplay, writeMcpServersConfig, getMcpServersConfig, normalizeInputToServersArray, type McpServerConfig } from '../mcp/config.js';
+import { refreshMcpTools, getMcpServerProjectDir } from '../mcp/client.js';
 import type { AppLocals } from '../types.js';
 
 const projectRoot = getPackageRoot();
@@ -72,11 +73,10 @@ function rateLimitMiddleware(req: Request, res: Response, next: () => void): voi
   if (!config.rateLimitMax || config.rateLimitMax <= 0) return next();
   if (req.path === '/health') return next();
   if (req.path === '/.well-known/oauth-protected-resource') return next();
-  // Don't rate-limit read-only or bootstrap endpoints the dashboard calls often
+  // Don't rate-limit read-only GETs so the dashboard can load (many parallel GETs on mount + Strict Mode double-invoke)
+  if (req.method === 'GET' && req.path.startsWith('/api/')) return next();
+  // Bootstrap / auth endpoints
   if (req.path.startsWith('/api/onboard')) return next();
-  if (req.path === '/api/agent/pending-actions' && req.method === 'GET') return next();
-  if (req.path === '/api/config' && req.method === 'GET') return next();
-  if (req.path === '/api/integrations/connections' && req.method === 'GET') return next();
   if (req.path === '/api/integrations/connect' && req.method === 'POST') return next();
   if (req.path.startsWith('/api/integrations/connections/') && req.method === 'DELETE') return next();
   if (req.path === '/api/oauth/connect-url' && req.method === 'GET') return next();
@@ -631,17 +631,18 @@ export function createGateway(appMount: Express | null = null): Express {
     }
   });
 
-  /** PUT /api/mcp/config — Save MCP servers (dashboard). Body: { servers }. Env values "***" are preserved from existing config. */
+  /** PUT /api/mcp/config — Save MCP servers (dashboard). Body: { servers } or { mcpServers } (any format; we store as { servers }). Env values "***" are preserved from existing config. */
   app.put('/api/mcp/config', async (req: Request, res: Response) => {
     try {
-      const body = req.body as { servers?: unknown[] };
-      if (!body || !Array.isArray(body.servers)) {
-        res.status(400).json({ error: 'Body must include servers array' });
+      const body = req.body as { servers?: unknown[]; mcpServers?: Record<string, unknown> };
+      if (!body || typeof body !== 'object') {
+        res.status(400).json({ error: 'Body must be an object with "servers" array or "mcpServers" object. We store as { "servers": [ { "name", "command", "args"?, "env"? } ] }.' });
         return;
       }
+      const serversArray = normalizeInputToServersArray(body);
       const current = getMcpServersConfig();
       const currentByName = new Map(current.map((s) => [s.name, s]));
-      const merged: McpServerConfig[] = body.servers.map((raw) => {
+      const merged: McpServerConfig[] = serversArray.map((raw) => {
         const o = raw as Record<string, unknown>;
         const name = typeof o.name === 'string' ? o.name.trim() : '';
         const command = typeof o.command === 'string' ? o.command.trim() : '';
@@ -661,11 +662,72 @@ export function createGateway(appMount: Express | null = null): Express {
         const entry: McpServerConfig = { name, command };
         if (args?.length) entry.args = args;
         if (Object.keys(env).length) entry.env = env;
+        const iconVal = typeof o.icon === 'string' ? o.icon.trim() : '';
+        if (iconVal) entry.icon = iconVal;
+        const credentialsUrlVal = typeof o.credentialsUrl === 'string' ? o.credentialsUrl.trim() : '';
+        if (credentialsUrlVal) entry.credentialsUrl = credentialsUrlVal;
         return entry;
       }).filter((c): c is McpServerConfig => c !== null);
+      const newNames = new Set(merged.map((s) => s.name.toLowerCase()));
+      for (const removed of current) {
+        if (newNames.has(removed.name.toLowerCase())) continue;
+        const projectDir = getMcpServerProjectDir(removed);
+        if (projectDir && existsSync(projectDir)) {
+          try {
+            rmSync(projectDir, { recursive: true });
+            log('gateway', 'info', `Removed MCP server project dir`, { path: projectDir });
+          } catch (e) {
+            log('gateway', 'warn', `Could not remove MCP server project dir: ${(e as Error).message}`, { path: projectDir });
+          }
+        }
+      }
       writeMcpServersConfig(merged);
       await refreshMcpTools();
       res.json(getMcpConfigForDisplay());
+    } catch (e) {
+      log('gateway', 'error', (e as Error).message);
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
+  /** POST /api/mcp/build-with-ai — Start an agent job to generate a TypeScript MCP server and add it. Body: { description: string }. */
+  app.post('/api/mcp/build-with-ai', (req: Request, res: Response) => {
+    try {
+      const body = req.body as { description?: string };
+      const description = typeof body?.description === 'string' ? body.description.trim() : '';
+      if (!description) {
+        res.status(400).json({ error: 'description is required (e.g. "Gmail MCP server to read and send emails")' });
+        return;
+      }
+      const mcpServersDirAbs = join(homedir(), '.sulala', 'mcp-servers');
+      const prompt =
+        `Create a new MCP server from scratch for Sulala with this description: "${description}". Do NOT search npm or the web—generate the server yourself.\n\n` +
+        `**Required SDK and pattern** (Sulala runs MCP over stdio; use this exact pattern):\n` +
+        `- Import: McpServer from "@modelcontextprotocol/sdk/server/mcp.js", StdioServerTransport from "@modelcontextprotocol/sdk/server/stdio.js", z from "zod".\n` +
+        `- Create: const server = new McpServer({ name: "<name>-mcp", version: "1.0.0" });\n` +
+        `- Register each tool with: server.registerTool("tool_name", { description: "...", inputSchema: z.object({ param: z.string().optional() }) }, async (args) => ({ content: [ { type: "text", text: JSON.stringify(result) } ] }));\n` +
+        `- Start stdio: await server.connect(new StdioServerTransport());\n` +
+        `- Tool result MUST be: { content: [ { type: "text", text: string } ] } (MCP spec).\n\n` +
+        `**For Gmail**: Add "googleapis" to package.json. Use google.auth.OAuth2(process.env.GMAIL_CLIENT_ID, process.env.GMAIL_CLIENT_SECRET, process.env.GMAIL_REDIRECT_URI) and setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN }). Register tools: gmail_list_messages (maxResults optional), gmail_read_message (messageId), gmail_send_email (to, subject, body). Use google.gmail({ version: "v1", auth }).\n\n` +
+        `Steps:\n` +
+        `1. Choose a short server name (e.g. gmail, github). All files MUST go under: ${mcpServersDirAbs}/<name>\n\n` +
+        `2. Use **write_file** with these EXACT paths (replace <name> with your chosen name):\n` +
+        `   - "${mcpServersDirAbs}/<name>/package.json": "type": "module", dependencies "@modelcontextprotocol/sdk", "zod", "tsx" (and "googleapis" for Gmail). Script "start": "tsx index.ts".\n` +
+        `   - "${mcpServersDirAbs}/<name>/index.ts": Full TypeScript that imports McpServer, StdioServerTransport, z; creates McpServer; registers tools with registerTool(name, { description, inputSchema: z.object(...) }, async (args) => ({ content: [{ type: "text", text: JSON.stringify(...) }] })); then await server.connect(new StdioServerTransport()). No server.listen()—stdio only.\n\n` +
+        `3. Run **run_command**: binary "sh", args ["-c", "cd ${mcpServersDirAbs}/<name> && npm install"].\n\n` +
+        `4. Call **test_mcp_server** with projectDir: "${mcpServersDirAbs}/<name>". If success: false, read the error, fix the code (write_file), run npm install again if package.json or dependencies changed, and retry test_mcp_server. Repeat until success: true (up to 5 attempts).\n\n` +
+        `5. Call **add_mcp_server** with name "<name>", command "npx", args ["-y", "tsx", "${mcpServersDirAbs}/<name>/index.ts"], env with placeholder keys (e.g. GMAIL_CLIENT_ID: "your-key-here"), and credentialsUrl (e.g. Gmail: https://developers.google.com/gmail/api/quickstart/nodejs). Do this ONLY after test_mcp_server returns success: true.\n\n` +
+        `Always fix until **test_mcp_server** succeeds, then call **add_mcp_server** exactly once. Use the exact path "${mcpServersDirAbs}/<name>/..." for every write_file, run_command, and test_mcp_server. Reply briefly with what you created.`;
+      const taskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+      const payload = { prompt, name: 'Build MCP server' };
+      insertTask({ id: taskId, type: 'agent_job', payload });
+      const enqueueTaskId = (app.locals as AppLocals).enqueueTaskId;
+      if (typeof enqueueTaskId === 'function') enqueueTaskId(taskId);
+      log('gateway', 'info', 'MCP build-with-ai job enqueued', { taskId, description: description.slice(0, 80) });
+      res.status(201).json({
+        taskId,
+        message: 'Build job started. The agent will generate a TypeScript MCP server and add it. Refresh the MCP server list or check Jobs for status.',
+      });
     } catch (e) {
       log('gateway', 'error', (e as Error).message);
       res.status(500).json({ error: (e as Error).message });
@@ -1301,6 +1363,27 @@ export function createGateway(appMount: Express | null = null): Express {
       }
       const { complete } = await import('../ai/orchestrator.js');
       const result = await complete({ provider, model, messages, max_tokens: max_tokens || 1024 });
+      res.json(result);
+    } catch (e) {
+      log('gateway', 'error', (e as Error).message, { stack: (e as Error).stack });
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
+  /** POST /api/jobs/parse — Parse natural language into job prompt + schedule using LLM. */
+  app.post('/api/jobs/parse', async (req: Request, res: Response) => {
+    try {
+      const { message, provider: bodyProvider, model: bodyModel } = req.body || {};
+      const userMessage = typeof message === 'string' ? message.trim() : '';
+      if (!userMessage) {
+        res.status(400).json({ error: 'message (string) required' });
+        return;
+      }
+      const { parseJobFromMessage } = await import('../agent/job-parse.js');
+      const result = await parseJobFromMessage(userMessage, {
+        provider: typeof bodyProvider === 'string' ? bodyProvider.trim() || null : null,
+        model: typeof bodyModel === 'string' ? bodyModel.trim() || null : null,
+      });
       res.json(result);
     } catch (e) {
       log('gateway', 'error', (e as Error).message, { stack: (e as Error).stack });

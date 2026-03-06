@@ -29,6 +29,10 @@ export type AgentStreamEvent =
 const DEFAULT_SYSTEM = 'You are a helpful assistant. You have access to tools; use them when appropriate.';
 const MAX_TOOL_TURNS = 10;
 
+/** Appended to system prompt so the agent suggests creating a job when the user asks for automation. */
+const AUTOMATION_JOBS_APPENDIX =
+  '\n\nWhen the user asks for something that should happen on a schedule, repeatedly, or automatically (e.g. "remind me every day", "post to Bluesky every morning", "send me news daily", "run X every hour"), suggest creating a scheduled job: ask "This sounds like something you want to run on a schedule. Would you like me to create a job for you? (yes/no)". If the user confirms (yes, please, do it, create it, etc.), use the **create_scheduled_job** tool with a clear description that includes both what to do and when (e.g. "Fetch daily news and post one to Bluesky every morning at 9"). Do not create a job without the user confirming.';
+
 /** Current date/time and timezone for the system prompt so the model can resolve "today", "tonight", etc. Exported for Pi runner. */
 export function getCurrentDateTimeContext(): string {
   const tz = (process.env.AGENT_TIMEZONE || '').trim() || Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -292,7 +296,7 @@ function loadContextFromPaths(): string {
   // Inject workspace path so the agent knows where to create skills and watch-folder automations.
   const workspaceSection =
     `## Workspace\n\n` +
-    `- **Integrations and MCP (posting or other actions on a service)**: For any service (Bluesky, X/Twitter, or future integrations): (1) Call **list_integrations_connections** with the provider that matches the request (e.g. provider "bluesky", "twitter"). (2) If connections exist, use the integration tool that matches that provider (e.g. bluesky_post for bluesky, x_post for twitter—match tool name to provider). (3) If no connection exists for that provider, or no matching integration tool is available, use an **MCP tool** if one fits: tools whose names start with **mcp_** come from configured MCP servers; pick one whose name or description matches the requested service and action (e.g. posting to Twitter → mcp_twitter_post_tweet). Never use an integration tool for a different provider (e.g. do not use x_post for Bluesky or bluesky_post for X/Twitter).\n\n` +
+    `- **Integrations and MCP (posting or other actions on a service)**: Use whichever is available and matches the request. (1) **Prefer MCP tools first**: if a tool whose name starts with **mcp_** matches the requested service and action (e.g. Gmail → mcp_gmail_list_messages, mcp_gmail_read_message; Twitter → mcp_twitter_post_tweet), use it directly. MCP tools are self-contained and work without Portal/Integrations. (2) **Otherwise use integrations**: call **list_integrations_connections** with the provider that matches (e.g. "bluesky", "twitter", "gmail"); if connections exist, use the integration tool (e.g. bluesky_post, x_post) or get_connection_token + run_command for APIs. (3) Do not call list_integrations_connections if a matching mcp_* tool exists—just use the MCP tool. Never use an integration tool for a different provider (e.g. do not use x_post for Bluesky).\n\n` +
     `- **Skills you create**: use **write_file** with path \`${config.skillsWorkspaceMyDir}/<slug>/README.md\` (e.g. \`${config.skillsWorkspaceMyDir}/my-skill/README.md\`). Also create \`${config.skillsWorkspaceMyDir}/<slug>/tools.yaml\` with \`tools: []\` and a short comment so the user can add required tools there. Do not use \`~\` or \`$HOME\`. Hub-installed skills live in \`${config.skillsWorkspaceDir}/<slug>/\`; keep created-by-you skills in \`${config.skillsWorkspaceMyDir}/\`.\n\n` +
     `- **Scripts and watch-folder automations**: Workspace root is \`${config.workspaceDir}\`. When the user asks to watch a folder and do something (e.g. post new images to Bluesky or Facebook):\n` +
     `  1. Create a script under \`${config.workspaceDir}/scripts/\` (e.g. \`scripts/watch_bluesky.sh\` or \`scripts/watch_facebook.sh\`) that accepts the **file path as first argument** (\`$1\`) and uses env vars for credentials.\n` +
@@ -349,7 +353,7 @@ export async function runAgentTurn(options: RunTurnOptions): Promise<RunTurnResu
 
     const historyLimit = config.agentMaxHistoryMessages > 0 ? config.agentMaxHistoryMessages + 50 : 80;
     const history = getAgentMessages(sessionId, historyLimit);
-    const baseSystem = optionPrompt ?? config.agentSystemPrompt ?? DEFAULT_SYSTEM;
+    const baseSystem = (optionPrompt ?? config.agentSystemPrompt ?? DEFAULT_SYSTEM) + AUTOMATION_JOBS_APPENDIX;
     let systemPrompt = await resolveSystemPrompt(sessionId, baseSystem, history.length + 1);
     const compacted = compactHistory(history, systemPrompt.length);
     const messages: AgentTurnMessage[] = [];
@@ -517,7 +521,7 @@ export async function runAgentTurnStream(
 
     const historyLimit = config.agentMaxHistoryMessages > 0 ? config.agentMaxHistoryMessages + 50 : 80;
     const history = getAgentMessages(sessionId, historyLimit);
-    const baseSystem = optionPrompt ?? config.agentSystemPrompt ?? DEFAULT_SYSTEM;
+    const baseSystem = (optionPrompt ?? config.agentSystemPrompt ?? DEFAULT_SYSTEM) + AUTOMATION_JOBS_APPENDIX;
     let systemPrompt = await resolveSystemPrompt(sessionId, baseSystem, history.length + 1);
     const compacted = compactHistory(history, systemPrompt.length);
     const messages: AgentTurnMessage[] = [];

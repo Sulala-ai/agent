@@ -135,26 +135,33 @@ export function PortalSettingsCard({
               <p className="text-muted-foreground text-xs font-medium">or</p>
             </>
           )}
-          <div className="space-y-1">
-            <Label htmlFor="portal-api-key" className="text-xs">
-              Portal API Key
-            </Label>
-            <Input
-              id="portal-api-key"
-              type="password"
-              placeholder={keyPlaceholder}
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              autoComplete="off"
-              className="h-8"
-            />
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="secondary" size="sm" onClick={save} disabled={saveDisabled}>
+          <form
+            className="space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              save();
+            }}
+          >
+            <div className="space-y-1">
+              <Label htmlFor="portal-api-key" className="text-xs">
+                Portal API Key
+              </Label>
+              <Input
+                id="portal-api-key"
+                type="password"
+                placeholder={keyPlaceholder}
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                autoComplete="off"
+                className="h-8"
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button type="submit" variant="secondary" size="sm" disabled={saveDisabled}>
               {saving ? "Saving…" : "Save"}
-            </Button>
-            <a
-              href={(() => {
+              </Button>
+              <a
+                href={(() => {
                 const trimmed = portalUrl.trim();
                 if (!trimmed) return "https://portal.sulala.ai/api/keys";
                 try {
@@ -171,7 +178,8 @@ export function PortalSettingsCard({
             >
               Create API key →
             </a>
-          </div>
+            </div>
+          </form>
         </div>
       )}
     </div>
