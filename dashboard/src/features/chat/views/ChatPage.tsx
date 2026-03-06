@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,6 +36,7 @@ function isJobCreationYesNoQuestion(content: string | null | undefined): boolean
   const c = content ?? "";
   return /would you like me to create (a )?job for you/i.test(c);
 }
+import { fetchMcpConfig } from "@/lib/api";
 import { getConnectedIntegrations } from "@/features/integrations/lib";
 import { AutomationSuggestionsBar } from "../components/AutomationSuggestionsBar";
 import { MissingIntegrationsModal } from "../components/MissingIntegrationsModal";
@@ -305,8 +306,19 @@ export function ChatPage(props: ChatPageProps) {
   const [missingModalRequired, setMissingModalRequired] = useState<string[]>([]);
   const [missingModalIdeaTitle, setMissingModalIdeaTitle] = useState<string>("");
   const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
+  const [mcpServerNames, setMcpServerNames] = useState<string[]>([]);
+
+  useEffect(() => {
+    fetchMcpConfig()
+      .then(({ servers }) => setMcpServerNames(servers?.map((s) => s.name.toLowerCase()) ?? []))
+      .catch(() => setMcpServerNames([]));
+  }, []);
 
   const connectedIds = getConnectedIntegrations(integrations);
+  /** Capabilities satisfied by OAuth integrations OR MCP servers (e.g. gmail MCP or gmail OAuth both allow gmail ideas). */
+  const availableIds = Array.from(
+    new Set([...connectedIds.map((id) => id.toLowerCase()), ...mcpServerNames])
+  );
 
   const showSuggestionsBar = chatMessages.length === 0 && chatInput.length === 0;
 
@@ -530,11 +542,19 @@ export function ChatPage(props: ChatPageProps) {
         </div>
         <ScrollArea className="min-h-[240px] flex-1 rounded-md border p-3">
           <div className="space-y-3">
-            {chatMessages.length === 0 && (
-              <p className="text-muted-foreground text-sm">
-                Send a message to start. Provider and model can be changed above.
-              </p>
-            )}
+            {chatMessages.length === 0 &&
+              (showSuggestionsBar ? (
+                <AutomationSuggestionsBar
+                  ideas={AUTOMATION_IDEAS}
+                  connectedIds={availableIds}
+                  onSelectIdea={handleSelectIdea}
+                  onMissingIntegrations={handleMissingIntegrations}
+                />
+              ) : (
+                <p className="text-muted-foreground text-sm">
+                  Send a message to start. Provider and model can be changed above.
+                </p>
+              ))}
             {chatMessages.map((m, i) => (
               <ChatMessage
                 key={i}
@@ -690,7 +710,7 @@ export function ChatPage(props: ChatPageProps) {
           requiredIntegrations={
             missingModalOpen ? missingModalRequired : missingIntegrationsFromServer ?? []
           }
-          connectedIds={connectedIds}
+          connectedIds={availableIds}
           ideaTitle={missingModalOpen ? missingModalIdeaTitle : ""}
           onConnect={handleModalConnect}
         />

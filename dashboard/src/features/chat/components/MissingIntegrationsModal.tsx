@@ -30,7 +30,10 @@ export function MissingIntegrationsModal({
   ideaTitle,
   onConnect,
 }: MissingIntegrationsModalProps) {
-  const connected = requiredIntegrations.filter((id) => connectedIds.includes(id));
+  const lower = (s: string) => s.toLowerCase();
+  const connected = requiredIntegrations.filter((id) =>
+    connectedIds.some((c) => lower(c) === lower(id))
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
