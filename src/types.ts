@@ -42,10 +42,10 @@ export interface Config {
   portalApiKey: string | null;
   /** Optional Discord bot token (env DISCORD_BOT_TOKEN). When set, discord_list_guilds, discord_list_channels, discord_send_message are available. */
   discordBotToken: string | null;
-  /** Optional Stripe secret key (env STRIPE_SECRET_KEY). When set, stripe_* tools are available. Can override via Settings → Payment. */
+  /** Optional Stripe secret key (env STRIPE_SECRET_KEY). When set, stripe_* tools from hub/workspace skills are available. No payment settings in the agent. */
   stripeSecretKey: string | null;
-  /** Bundled skills dir, e.g. <project>/context. */
-  skillsBundledDir: string;
+  /** Bundled skills dir (deprecated; no built-in system skills—use hub). */
+  skillsBundledDir: string | null;
   /** Workspace root: ~/.sulala/workspace (env SULALA_WORKSPACE_DIR). Contains skills/, scripts/, .env, automations.json. Agent can write scripts and credentials here. */
   workspaceDir: string;
   /** Workspace skills dir: ~/.sulala/workspace/skills/<skill-name>/README.md (env SULALA_WORKSPACE_SKILLS_DIR). Hub-installed skills go here. */

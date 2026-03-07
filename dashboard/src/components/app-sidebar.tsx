@@ -1,6 +1,6 @@
 "use client"
 
-import { BookOpen, CalendarClock, LayoutDashboard, MessageSquare, Plug, Settings2 } from "lucide-react"
+import { BookOpen, CalendarClock, LayoutDashboard, MessageSquare, Settings2 } from "lucide-react"
 
 import {
   Sidebar,
@@ -15,12 +15,11 @@ import {
   SidebarRail,
 } from "@/components/ui/sidebar"
 
-export type NavPage = "overview" | "tasks" | "logs" | "files" | "skills" | "jobs" | "chat" | "integrations" | "config" | "settings"
+export type NavPage = "overview" | "tasks" | "logs" | "files" | "skills" | "jobs" | "chat" | "config" | "settings"
 
 const mainNavItems: { page: NavPage; label: string; icon: typeof LayoutDashboard }[] = [
   { page: "chat", label: "AI Chat", icon: MessageSquare },
   { page: "skills", label: "Skills", icon: BookOpen },
-  { page: "integrations", label: "Integrations", icon: Plug },
   { page: "jobs", label: "Jobs", icon: CalendarClock },
   { page: "settings", label: "Settings", icon: Settings2 },
 ]

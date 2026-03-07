@@ -103,10 +103,10 @@ Run `npm test` to validate skills. The `validateSkillContent` function checks:
 Skills load from (highest to lowest):
 
 1. **User** (`~/.sulala/workspace/skills/<name>/README.md` or `SKILL.md`) — directory-per-skill; safe from project updates
-2. Workspace (`AGENT_CONTEXT_PATH`)
-3. Managed (`~/.sulala/skills`) — flat `.md` files
-4. Bundled (`context/`)
+2. Installed (workspace/hub — skills installed via `sulala skill install` or dashboard)
+3. Workspace (`AGENT_CONTEXT_PATH`)
+4. Managed (`~/.sulala/skills`) — flat `.md` files
 5. Plugin (`plugins/*/skills`)
 6. Extra (`SKILLS_EXTRA_DIRS`)
 
-On name conflict, the higher source wins. To create a skill that won't be overwritten on project updates, use `~/.sulala/workspace/skills/my/<slug>/README.md`. Refresh skills or restart the gateway to pick it up.
+There are no built-in bundled skills; use the hub to install skills. On name conflict, the higher source wins. To create a skill that won't be overwritten on project updates, use `~/.sulala/workspace/skills/my/<slug>/README.md`. Refresh skills or restart the gateway to pick it up.

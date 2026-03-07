@@ -18,7 +18,7 @@ export type MissingIntegrationsModalProps = {
   connectedIds: string[];
   /** Idea title for context */
   ideaTitle?: string;
-  /** Called when user clicks Connect for a provider (navigate or start OAuth) */
+  /** Called when user clicks Add skill (navigates to Skills to install from hub) */
   onConnect: (provider: string) => void;
 };
 
@@ -43,8 +43,7 @@ export function MissingIntegrationsModal({
             {ideaTitle ? `Missing integrations: ${ideaTitle}` : "Missing integrations"}
           </DialogTitle>
           <DialogDescription>
-            Connect the required apps below, then try again. Do not execute the workflow until all
-            required integrations are connected.
+            Install the required skills from the hub (Skills → Add skill from registry), then try again. Do not run the workflow until the needed capabilities are available.
           </DialogDescription>
         </DialogHeader>
         <ul className="space-y-2 text-sm">
@@ -71,7 +70,7 @@ export function MissingIntegrationsModal({
                 </span>
                 {!isConnected && (
                   <Button size="sm" variant="outline" onClick={() => onConnect(id)}>
-                    Connect
+                    Add skill
                   </Button>
                 )}
               </li>

@@ -38,7 +38,7 @@ export type IntegrationAppMeta = {
   tokenOnly?: boolean;
 };
 
-/** Fallback when the integrations API is unreachable (e.g. portal mode with no INTEGRATIONS_URL). You do not need to add every new integration here—the dashboard prefers the list from the integrations service when available. */
+/** App metadata for automation ideas and missing-integrations UI (e.g. Gmail, Slack). */
 const appMeta: IntegrationAppMeta[] = [
   { id: "github", name: "GitHub", description: "Repos, issues, and code", category: "featured", icon: Github, logoUrl: `${LOGO_BASE}/github` },
   { id: "gmail", name: "Gmail", description: "Send and read email", category: "featured", icon: Mail, logoUrl: `${LOGO_BASE}/gmail` },

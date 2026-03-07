@@ -1,0 +1,274 @@
+# Stripe API tools. Auth: stripe_secret_key (STRIPE_SECRET_KEY in .env).
+# URL base: https://api.stripe.com/v1
+tools:
+  - name: stripe_list_customers
+    description: "List Stripe customers. Call this when the user asks to list customers in Stripe (do not use list_integrations_connections—Stripe is not OAuth). Uses the Stripe secret key from STRIPE_SECRET_KEY in .env. Returns customers with id, email, name; or an error if Stripe is not configured."
+    profile: full
+    auth: stripe_secret_key
+    request:
+      method: GET
+      url: https://api.stripe.com/v1/customers
+      queryParams: { limit: limit }
+    parameters:
+      - name: limit
+        type: number
+        description: Max customers to return (default 10, max 100)
+        default: 10
+    response:
+      listPath: data
+      itemKeys: [id, email, name]
+      outputKey: customers
+      countKey: count
+
+  - name: stripe_get_customer
+    description: Get a Stripe customer by ID. Uses the key from STRIPE_SECRET_KEY in .env. Returns id, email, name; or an error.
+    profile: full
+    auth: stripe_secret_key
+    request:
+      method: GET
+      url: https://api.stripe.com/v1/customers/{{customer_id}}
+    parameters:
+      - name: customer_id
+        type: string
+        description: Stripe customer ID (e.g. cus_xxx)
+        required: true
+    response:
+      singleKeys: [id, email, name]
+
+  - name: stripe_list_invoices
+    description: List Stripe invoices. Optional customer_id to filter by customer. Uses key from STRIPE_SECRET_KEY in .env. Returns id, amount_due, status, hosted_invoice_url, invoice_pdf.
+    profile: full
+    auth: stripe_secret_key
+    request:
+      method: GET
+      url: https://api.stripe.com/v1/invoices
+      queryParams: { limit: limit, customer: customer_id }
+    parameters:
+      - name: limit
+        type: number
+        description: Max invoices to return (default 10, max 100)
+        default: 10
+      - name: customer_id
+        type: string
+        description: Optional Stripe customer ID to filter by
+    response:
+      listPath: data
+      itemKeys: [id, amount_due, status, hosted_invoice_url, invoice_pdf]
+      outputKey: invoices
+      countKey: count
+
+  - name: stripe_get_invoice
+    description: Get a Stripe invoice by ID. Uses key from STRIPE_SECRET_KEY in .env. Returns id, amount_due, status, hosted_invoice_url, invoice_pdf.
+    profile: full
+    auth: stripe_secret_key
+    request:
+      method: GET
+      url: https://api.stripe.com/v1/invoices/{{invoice_id}}
+    parameters:
+      - name: invoice_id
+        type: string
+        description: Stripe invoice ID (e.g. in_xxx)
+        required: true
+    response:
+      singleKeys: [id, amount_due, status, hosted_invoice_url, invoice_pdf]
+
+  - name: stripe_create_invoice
+    description: Create a Stripe invoice for a customer with one line item by amount, then finalize it (open/unpaid). Use for ad-hoc line items. Provide customer_id, amount_dollars (e.g. 600) or amount_cents, and description. For invoice linked to a product (e.g. "iPhone $600"), use stripe_search_products → stripe_create_product_with_price if product missing → stripe_create_invoice_from_product with the product's default_price. Returns invoice_id, status, hosted_invoice_url, invoice_pdf.
+    profile: full
+    auth: stripe_secret_key
+    transformArgs:
+      amount_cents: "amount_dollars * 100"
+    steps:
+      - method: POST
+        url: https://api.stripe.com/v1/invoices
+        bodyType: form
+        body: { customer: customer_id, currency: currency }
+        responsePath: id
+      - method: POST
+        url: https://api.stripe.com/v1/invoiceitems
+        bodyType: form
+        body: { invoice: "{{step0}}", customer: customer_id, amount: amount_cents, currency: currency, description: description }
+      - method: POST
+        url: "https://api.stripe.com/v1/invoices/{{step0}}/finalize"
+        bodyType: form
+        body: {}
+    parameters:
+      - name: customer_id
+        type: string
+        description: Stripe customer ID (e.g. cus_xxx)
+        required: true
+      - name: amount_dollars
+        type: number
+        description: Amount in dollars (e.g. 600 for $600). Use this or amount_cents, not both.
+      - name: amount_cents
+        type: number
+        description: Amount in cents (e.g. 60000 for $600). Use this or amount_dollars, not both.
+      - name: description
+        type: string
+        description: Line item description (e.g. "buy computer")
+        default: "Invoice item"
+      - name: currency
+        type: string
+        description: Three-letter currency code (default usd)
+        default: usd
+    response:
+      singleKeys: [id, status, hosted_invoice_url, invoice_pdf]
+    responseExtra:
+      ok: true
+      invoice_id: "{{step2.id}}"
+      message: "Invoice created and finalized."
+
+  - name: stripe_list_products
+    description: List Stripe products (catalog). Uses key from STRIPE_SECRET_KEY in .env. Returns id, name, description, active, default_price (price id if set). Use to check if a product exists before creating an invoice for it.
+    profile: full
+    auth: stripe_secret_key
+    request:
+      method: GET
+      url: https://api.stripe.com/v1/products
+      queryParams: { limit: limit }
+    parameters:
+      - name: limit
+        type: number
+        description: Max products to return (default 10, max 100)
+        default: 10
+    response:
+      listPath: data
+      itemKeys: [id, name, description, active, default_price]
+      outputKey: products
+      countKey: count
+
+  - name: stripe_search_products
+    description: Search Stripe products by query (e.g. "name:'iPhone'" or "iPhone"). Use before creating an invoice for a product—if no product exists, create it with stripe_create_product_with_price first. Returns id, name, description, active, default_price.
+    profile: full
+    auth: stripe_secret_key
+    request:
+      method: GET
+      url: https://api.stripe.com/v1/products/search
+      queryParams: { query: query, limit: limit }
+    parameters:
+      - name: query
+        type: string
+        description: Search query (e.g. "name:'iPhone'" or "iPhone")
+        required: true
+      - name: limit
+        type: number
+        description: Max results (default 10, max 100)
+        default: 10
+    response:
+      listPath: data
+      itemKeys: [id, name, description, active, default_price]
+      outputKey: products
+      countKey: count
+
+  - name: stripe_get_product
+    description: Get a Stripe product by ID. Returns id, name, description, active, default_price (price id to use in stripe_create_invoice_from_product).
+    profile: full
+    auth: stripe_secret_key
+    request:
+      method: GET
+      url: https://api.stripe.com/v1/products/{{product_id}}
+    parameters:
+      - name: product_id
+        type: string
+        description: Stripe product ID (e.g. prod_xxx)
+        required: true
+    response:
+      singleKeys: [id, name, description, active, default_price]
+
+  - name: stripe_create_product
+    description: Create a Stripe product (no price). Use for catalog-only products. For a product with a price use stripe_create_product_with_price.
+    profile: full
+    auth: stripe_secret_key
+    request:
+      method: POST
+      url: https://api.stripe.com/v1/products
+      bodyType: form
+      body: { name: name, description: description }
+    parameters:
+      - name: name
+        type: string
+        description: Product name (e.g. iPhone)
+        required: true
+      - name: description
+        type: string
+        description: Optional product description
+    response:
+      singleKeys: [id, name, description, active, default_price]
+
+  - name: stripe_create_product_with_price
+    description: Create a Stripe product with a default price (one-time). Use when the user asks to create an invoice for a product that does not exist yet—first search (stripe_search_products or stripe_list_products); if not found, call this with name and amount, then use the returned default_price with stripe_create_invoice_from_product. Returns id, name, default_price (use this price_id for the invoice).
+    profile: full
+    auth: stripe_secret_key
+    transformArgs:
+      unit_amount_cents: "amount_dollars * 100"
+    request:
+      method: POST
+      url: https://api.stripe.com/v1/products
+      bodyType: form
+      body:
+        name: name
+        description: description
+        "default_price_data[unit_amount]": unit_amount_cents
+        "default_price_data[currency]": currency
+    parameters:
+      - name: name
+        type: string
+        description: Product name (e.g. iPhone)
+        required: true
+      - name: description
+        type: string
+        description: Optional product description
+      - name: amount_dollars
+        type: number
+        description: Price in dollars (e.g. 600 for $600). Use this or unit_amount_cents.
+      - name: unit_amount_cents
+        type: number
+        description: Price in cents (e.g. 60000). Use this or amount_dollars.
+      - name: currency
+        type: string
+        description: Currency code (default usd)
+        default: usd
+    response:
+      singleKeys: [id, name, description, active, default_price]
+
+  - name: stripe_create_invoice_from_product
+    description: Create a Stripe invoice for a customer using an existing price (from a product's default_price). Use after ensuring the product exists (stripe_search_products → stripe_create_product_with_price if needed); then call this with customer_id and price_id (the default_price from the product). Pass currency (default usd) to match the price's currency—required if the Stripe account default is not USD (e.g. CAD). Returns invoice_id, status, hosted_invoice_url, invoice_pdf.
+    profile: full
+    auth: stripe_secret_key
+    steps:
+      - method: POST
+        url: https://api.stripe.com/v1/invoices
+        bodyType: form
+        body: { customer: customer_id, currency: currency }
+        responsePath: id
+      - method: POST
+        url: https://api.stripe.com/v1/invoiceitems
+        bodyType: form
+        body: { invoice: "{{step0}}", customer: customer_id, price: price_id, quantity: quantity }
+      - method: POST
+        url: "https://api.stripe.com/v1/invoices/{{step0}}/finalize"
+        bodyType: form
+        body: {}
+    parameters:
+      - name: customer_id
+        type: string
+        description: Stripe customer ID (e.g. cus_xxx)
+        required: true
+      - name: price_id
+        type: string
+        description: Stripe price ID (e.g. price_xxx) from product.default_price or stripe_create_product_with_price response
+        required: true
+      - name: currency
+        type: string
+        description: Invoice currency; must match the price currency (default usd). Use usd when the price is in USD and the account default is e.g. CAD.
+        default: usd
+      - name: quantity
+        type: number
+        description: Quantity (default 1)
+        default: 1
+    response:
+      singleKeys: [id, status, hosted_invoice_url, invoice_pdf]
+    responseExtra:
+      ok: true
+      invoice_id: "{{step2.id}}"
+      message: "Invoice created and finalized."

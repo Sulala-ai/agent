@@ -1,0 +1,56 @@
+# Discord API tools. Auth: discord_bot_token (Settings → Channels or DISCORD_BOT_TOKEN).
+# Base: https://discord.com/api/v10
+tools:
+  - name: discord_list_guilds
+    description: List Discord servers (guilds) the bot is in. Uses the bot token from Settings → Channels (Discord) or DISCORD_BOT_TOKEN. Do not use list_integrations_connections for Discord. Returns guilds with id and name; or an error if Discord is not configured.
+    profile: full
+    auth: discord_bot_token
+    request:
+      method: GET
+      url: https://discord.com/api/v10/users/@me/guilds
+    parameters: []
+    response:
+      rootIsArray: true
+      itemKeys: [id, name]
+      outputKey: guilds
+      countKey: count
+
+  - name: discord_list_channels
+    description: List channels in a Discord server (guild). Uses the bot token from Settings → Channels. Call discord_list_guilds first to get guild_id. Returns channels with id, name, type (0=text, 2=voice, 4=category).
+    profile: full
+    auth: discord_bot_token
+    request:
+      method: GET
+      url: https://discord.com/api/v10/guilds/{{guild_id}}/channels
+    parameters:
+      - name: guild_id
+        type: string
+        description: Discord guild (server) ID from discord_list_guilds
+        required: true
+    response:
+      rootIsArray: true
+      itemKeys: [id, name, type]
+      outputKey: channels
+      countKey: count
+
+  - name: discord_send_message
+    description: Send a message to a Discord channel. Uses the bot token from Settings → Channels. Call discord_list_guilds then discord_list_channels to get channel_id. Max content length 2000 characters.
+    profile: full
+    auth: discord_bot_token
+    request:
+      method: POST
+      url: https://discord.com/api/v10/channels/{{channel_id}}/messages
+      bodyType: json
+      bodyKeys: [content]
+    parameters:
+      - name: channel_id
+        type: string
+        description: Discord channel ID from discord_list_channels
+        required: true
+      - name: content
+        type: string
+        description: Message text (max 2000 chars)
+        required: true
+    response:
+      singleKeys: [id]
+      outputKey: message_id

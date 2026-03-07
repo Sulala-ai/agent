@@ -1,5 +1,5 @@
 /**
- * Unit tests for integration tools: Stripe, Discord, list_integrations_connections.
+ * Unit tests for integration-related tools: Stripe, Discord.
  * Run with: pnpm test tools.integrations
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
@@ -13,18 +13,15 @@ vi.mock("../channels/discord.js", () => ({
   getEffectiveDiscordBotToken: vi.fn(),
 }));
 
-// Mock config: resolve store system skills path from cwd (agent/) so spec-loader finds stripe/discord tools.
+// Mock config: use test fixtures so spec-loader finds stripe/discord tools (no built-in system skills).
 vi.mock("../config.js", () => {
   const { join } = require("path");
   return {
     config: {
-      integrationsUrl: null,
       agentToolAllowlist: null,
       agentToolProfile: "full",
-      agentContextPath: join(process.cwd(), "..", "store", "data", "skills", "system"),
+      agentContextPath: join(process.cwd(), "test-fixtures", "skills"),
     },
-    getPortalGatewayBase: vi.fn(() => null),
-    getEffectivePortalApiKey: vi.fn(() => null),
   };
 });
 
@@ -57,7 +54,7 @@ describe("integration tools", () => {
       const result = await (tool!.execute as (args: unknown) => Promise<unknown>)({});
       expect(result).toEqual({
         error:
-          "Stripe is not configured. Add a secret key in Settings → Payment or set STRIPE_SECRET_KEY.",
+          "Stripe is not configured. Set STRIPE_SECRET_KEY in .env or in the skill config.",
       });
     });
 
@@ -266,77 +263,4 @@ describe("integration tools", () => {
     });
   });
 
-  describe("list_integrations_connections", () => {
-    it("returns error when Portal and INTEGRATIONS_URL are not set", async () => {
-      const { getPortalGatewayBase, getEffectivePortalApiKey } = await import("../config.js");
-      (getPortalGatewayBase as ReturnType<typeof vi.fn>).mockReturnValue(null);
-      (getEffectivePortalApiKey as ReturnType<typeof vi.fn>).mockReturnValue(null);
-      const { config } = await import("../config.js");
-      config.integrationsUrl = null;
-
-      const tool = getTool("list_integrations_connections");
-      const result = await (tool!.execute as (args: unknown) => Promise<unknown>)({});
-      expect(result).toMatchObject({
-        error: expect.stringContaining(
-          "Set PORTAL_GATEWAY_URL + PORTAL_API_KEY (from Portal → API Keys) or INTEGRATIONS_URL"
-        ),
-      });
-    });
-
-    it("returns connections when Portal gateway responds", async () => {
-      const { getPortalGatewayBase, getEffectivePortalApiKey } = await import("../config.js");
-      (getPortalGatewayBase as ReturnType<typeof vi.fn>).mockReturnValue("https://portal.example.com");
-      (getEffectivePortalApiKey as ReturnType<typeof vi.fn>).mockReturnValue("api_key_xxx");
-
-      mockFetch.mockResolvedValueOnce({
-        status: 200,
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            connections: [
-              { connection_id: "conn_linear_1", provider: "linear" },
-              { connection_id: "conn_gmail_1", provider: "gmail" },
-            ],
-          }),
-      });
-
-      const tool = getTool("list_integrations_connections");
-      const result = await (tool!.execute as (args: unknown) => Promise<unknown>)({});
-      expect(result).toEqual({
-        connections: [
-          { id: "conn_linear_1", provider: "linear" },
-          { id: "conn_gmail_1", provider: "gmail" },
-        ],
-        count: 2,
-      });
-      expect(mockFetch).toHaveBeenCalledWith("https://portal.example.com/connections", {
-        headers: { Authorization: "Bearer api_key_xxx" },
-      });
-    });
-
-    it("filters by provider when given", async () => {
-      const { getPortalGatewayBase, getEffectivePortalApiKey } = await import("../config.js");
-      (getPortalGatewayBase as ReturnType<typeof vi.fn>).mockReturnValue("https://portal.example.com");
-      (getEffectivePortalApiKey as ReturnType<typeof vi.fn>).mockReturnValue("key");
-
-      mockFetch.mockResolvedValueOnce({
-        status: 200,
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            connections: [
-              { connection_id: "conn_linear_1", provider: "linear" },
-              { connection_id: "conn_gmail_1", provider: "gmail" },
-            ],
-          }),
-      });
-
-      const tool = getTool("list_integrations_connections");
-      const result = await (tool!.execute as (args: unknown) => Promise<unknown>)({ provider: "linear" });
-      expect(result).toEqual({
-        connections: [{ id: "conn_linear_1", provider: "linear" }],
-        count: 1,
-      });
-    });
-  });
 });

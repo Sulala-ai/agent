@@ -4,8 +4,6 @@ const GATEWAY_URL =
 
 /** Optional: fetch hub registry from this URL (e.g. http://localhost:3002 for local store). If set, From Hub tab uses this; install requests pass it to the gateway. */
 const HUB_REGISTRY_URL = (import.meta.env.VITE_SKILLS_REGISTRY_URL as string)?.trim?.() || null;
-/** Integrations service URL only when explicitly set (env or agent config). No default to avoid hitting localhost:1717. */
-const DEFAULT_INTEGRATIONS_URL = (import.meta.env.VITE_INTEGRATIONS_URL as string)?.trim?.() || null;
 const API_KEY = import.meta.env.VITE_GATEWAY_API_KEY || "";
 
 function headers(extra: HeadersInit = {}): HeadersInit {
@@ -244,30 +242,6 @@ export async function updateChannelsDiscord(body: { botToken?: string | null }):
   return res.json();
 }
 
-export type StripeChannelState = { configured: boolean };
-
-export async function fetchChannelsStripe(): Promise<StripeChannelState> {
-  const res = await fetch(`${GATEWAY_URL}/api/channels/stripe`, { headers: headers() });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as { error?: string }).error || `Fetch Stripe channel failed: ${res.status}`);
-  }
-  return res.json();
-}
-
-export async function updateChannelsStripe(body: { secretKey?: string | null }): Promise<StripeChannelState> {
-  const res = await fetch(`${GATEWAY_URL}/api/channels/stripe`, {
-    method: "PUT",
-    headers: headers(),
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as { error?: string }).error || `Update Stripe channel failed: ${res.status}`);
-  }
-  return res.json();
-}
-
 export async function fetchScheduleRuns(
   id: string,
   limit = 30
@@ -392,14 +366,6 @@ export function wsUrl(): string {
 export type Config = {
   watchFolders: string[];
   aiProviders: { id: string; label: string; defaultModel: string }[];
-  /** From agent INTEGRATIONS_URL; dashboard uses this for Integrations page when set. */
-  integrationsUrl?: string | null;
-  /** 'portal' = agent uses Portal; 'direct' = agent uses INTEGRATIONS_URL; null = neither. */
-  integrationsMode?: "portal" | "direct" | null;
-  /** Portal base URL when integrationsMode === 'portal'. */
-  portalGatewayUrl?: string | null;
-  /** When true, agent has PORTAL_OAUTH_CLIENT_ID set; dashboard can show "Connect with Sulala (OAuth)". */
-  portalOAuthConnectAvailable?: boolean;
   /** ChatGPT Apps SDK / MCP OAuth 2.1 config (onboarding and settings). */
   chatgptOAuth?: {
     enabled: boolean;
@@ -468,7 +434,7 @@ export type IntegrationConnection = {
 
 export type IntegrationProviderMeta = { id: string; name: string; iconUrl: string };
 
-/** One integration from GET /integrations: provider meta + connections (no merge needed). */
+/** App/provider meta for automation ideas and missing-integrations UI. */
 export type IntegrationItem = {
   id: string;
   name: string;
@@ -478,113 +444,6 @@ export type IntegrationItem = {
   /** When true, app uses a bot/token in agent .env (e.g. Discord). No OAuth Connect. */
   tokenOnly?: boolean;
 };
-
-/** Base URL for integrations API when set (agent config or VITE_*). Returns null when none set — do not call integrations service. */
-function getIntegrationsBaseUrl(override?: string | null): string | null {
-  const url = override?.trim() || DEFAULT_INTEGRATIONS_URL;
-  return url ? url.replace(/\/$/, "") : null;
-}
-
-/** Fetch full integrations list (providers + connections). No merge needed. Requires baseUrl or VITE_INTEGRATIONS_URL. */
-export async function fetchIntegrations(baseUrl?: string | null): Promise<{ integrations: IntegrationItem[] }> {
-  const base = getIntegrationsBaseUrl(baseUrl);
-  if (!base) throw new Error("Integrations URL not configured. Set INTEGRATIONS_URL in the agent .env or configure Portal in Settings.");
-  const res = await fetch(`${base}/integrations`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`Failed to fetch integrations: ${res.status}`);
-  const data = (await res.json()) as { integrations?: unknown[] };
-  const raw = data.integrations ?? [];
-  const integrations: IntegrationItem[] = raw.map((item: unknown) => {
-    if (typeof item !== "object" || item === null || !("id" in item) || typeof (item as { id: string }).id !== "string") {
-      return {
-        id: "unknown",
-        name: "Unknown",
-        iconUrl: "",
-        description: "",
-        connections: [],
-      };
-    }
-    const o = item as { id: string; name?: string; iconUrl?: string; description?: string; connections?: unknown[] };
-    const conns = Array.isArray(o.connections)
-      ? o.connections.map((c: unknown) => {
-          const x = c as Record<string, unknown>;
-          return {
-            id: String(x?.id ?? ""),
-            provider: String(x?.provider ?? ""),
-            scopes: Array.isArray(x?.scopes) ? (x.scopes as string[]) : [],
-            createdAt: Number(x?.createdAt ?? 0),
-            updatedAt: x?.updatedAt != null ? Number(x.updatedAt) : undefined,
-          };
-        })
-      : [];
-    return {
-      id: o.id,
-      name: typeof o.name === "string" ? o.name : o.id,
-      iconUrl: typeof o.iconUrl === "string" ? o.iconUrl : "",
-      description: typeof o.description === "string" ? o.description : "",
-      connections: conns,
-    };
-  });
-  return { integrations };
-}
-
-export async function fetchIntegrationsProviders(baseUrl?: string | null): Promise<{
-  providers: IntegrationProviderMeta[];
-}> {
-  const base = getIntegrationsBaseUrl(baseUrl);
-  if (!base) throw new Error("Integrations URL not configured.");
-  const res = await fetch(`${base}/providers`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`Failed to fetch providers: ${res.status}`);
-  const data = (await res.json()) as { providers?: unknown[] };
-  const raw = data.providers ?? [];
-  const providers: IntegrationProviderMeta[] = raw.map((p: unknown) => {
-    if (typeof p === "object" && p !== null && "id" in p && typeof (p as { id: string }).id === "string") {
-      const o = p as { id: string; name?: string; iconUrl?: string };
-      return { id: o.id, name: typeof o.name === "string" ? o.name : o.id, iconUrl: typeof o.iconUrl === "string" ? o.iconUrl : "" };
-    }
-    const s = String(p);
-    return { id: s, name: s, iconUrl: "" };
-  });
-  return { providers };
-}
-
-export async function fetchIntegrationsConnections(
-  provider?: string,
-  baseUrl?: string | null
-): Promise<{ connections: IntegrationConnection[] }> {
-  const base = getIntegrationsBaseUrl(baseUrl);
-  if (!base) throw new Error("Integrations URL not configured.");
-  const q = provider ? `?provider=${encodeURIComponent(provider)}` : "";
-  const res = await fetch(`${base}/connections${q}`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`Failed to fetch connections: ${res.status}`);
-  return res.json();
-}
-
-export async function startIntegrationsConnect(
-  provider: string,
-  redirectSuccess: string,
-  baseUrl?: string | null
-): Promise<{ authUrl: string; state: string; connectionId: string }> {
-  const base = getIntegrationsBaseUrl(baseUrl);
-  if (!base) throw new Error("Integrations URL not configured. Set INTEGRATIONS_URL or use Portal in Settings.");
-  const res = await fetch(`${base}/connect/${encodeURIComponent(provider)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ redirect_success: redirectSuccess }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as { error?: string }).error || `Connect failed: ${res.status}`);
-  }
-  return res.json();
-}
-
-export async function deleteIntegrationsConnection(id: string, baseUrl?: string | null): Promise<{ ok: boolean }> {
-  const base = getIntegrationsBaseUrl(baseUrl);
-  if (!base) throw new Error("Integrations URL not configured.");
-  const res = await fetch(`${base}/connections/${encodeURIComponent(id)}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(`Failed to disconnect: ${res.status}`);
-  return res.json();
-}
 
 export async function fetchConfig(): Promise<Config> {
   const res = await fetch(`${GATEWAY_URL}/api/config`, { headers: headers(), cache: "no-store" });
@@ -626,6 +485,16 @@ export async function updateMcpConfig(servers: McpServerEntry[]): Promise<{ serv
   return res.json();
 }
 
+/** Re-read ~/.sulala/mcp.json (or MCP_SERVERS env) and reload MCP tools. Use after editing mcp.json by hand so changes take effect without restarting the agent. */
+export async function reloadMcpConfig(): Promise<{ servers: McpServerEntry[] }> {
+  const res = await fetch(`${GATEWAY_URL}/api/mcp/reload`, { method: "POST", headers: headers() });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || `Failed to reload MCP config: ${res.status}`);
+  }
+  return res.json();
+}
+
 /** Start an AI job to find or build an MCP server and add it. Returns taskId and message. */
 export async function buildMcpServerWithAi(description: string): Promise<{ taskId: string; message: string }> {
   const res = await fetch(`${GATEWAY_URL}/api/mcp/build-with-ai`, {
@@ -636,60 +505,6 @@ export async function buildMcpServerWithAi(description: string): Promise<{ taskI
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { error?: string }).error || `Failed to start build: ${res.status}`);
-  }
-  return res.json();
-}
-
-/** Get Portal "Connect with Sulala" OAuth URL. Redirect user to this URL to start the flow. Optional return_to (e.g. onboarding_step_3) is passed back after callback. */
-export async function fetchOAuthConnectUrl(return_to?: string): Promise<{ url: string }> {
-  const q = return_to?.trim() ? `?return_to=${encodeURIComponent(return_to.trim())}` : "";
-  const res = await fetch(`${GATEWAY_URL}/api/oauth/connect-url${q}`, { headers: headers(), cache: "no-store" });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as { error?: string }).error || `Failed to get Connect URL: ${res.status}`);
-  }
-  return res.json();
-}
-
-/** Fetch connections from Portal via agent (when integrationsMode === "portal"). Agent uses PORTAL_API_KEY. */
-export async function fetchPortalConnections(): Promise<{ connections: IntegrationConnection[] }> {
-  const res = await fetch(`${GATEWAY_URL}/api/integrations/connections`, { headers: headers(), cache: "no-store" });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as { error?: string }).error || `Failed to fetch Portal connections: ${res.status}`);
-  }
-  const data = (await res.json()) as { connections?: IntegrationConnection[] };
-  return { connections: data.connections ?? [] };
-}
-
-/** Start OAuth connect via Portal (agent proxies with API key). Use when integrationsMode === "portal". */
-export async function startPortalConnect(
-  provider: string,
-  redirectSuccess: string
-): Promise<{ authUrl: string; connectionId: string | null }> {
-  const res = await fetch(`${GATEWAY_URL}/api/integrations/connect`, {
-    method: "POST",
-    headers: headers(),
-    body: JSON.stringify({ provider, redirect_success: redirectSuccess }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as { error?: string }).error || `Connect failed: ${res.status}`);
-  }
-  const data = (await res.json()) as { authUrl?: string; connectionId?: string | null };
-  if (!data.authUrl) throw new Error("No authUrl from agent");
-  return { authUrl: data.authUrl, connectionId: data.connectionId ?? null };
-}
-
-/** Disconnect via Portal (agent proxies with API key). Use when integrationsMode === "portal". */
-export async function deletePortalConnection(id: string): Promise<{ ok: boolean }> {
-  const res = await fetch(`${GATEWAY_URL}/api/integrations/connections/${encodeURIComponent(id)}`, {
-    method: "DELETE",
-    headers: headers(),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as { error?: string }).error || `Disconnect failed: ${res.status}`);
   }
   return res.json();
 }
@@ -860,7 +675,11 @@ export type AgentSkill = {
   missing?: string[];
   /** Required env vars from skill metadata (e.g. BSKY_HANDLE, BSKY_APP_PASSWORD). Config stored by env key. */
   env?: string[];
-  source?: "user" | "installed" | "workspace" | "managed" | "bundled" | "plugin" | "extra";
+  /** Optional per-env hints from skill metadata (e.g. { PORTAL_API_KEY: "Get from portal.sulala.ai → API Keys" }). */
+  envHints?: Record<string, string>;
+  /** OAuth scope URLs from skill metadata (e.g. Gmail). User can override in skill config. */
+  oauthScopes?: string[];
+  source?: "user" | "installed" | "workspace" | "managed" | "plugin" | "extra";
   category?: string;
   version?: string;
   tags?: string[];
@@ -931,11 +750,12 @@ export async function fetchAgentSkillsRegistry(): Promise<{ skills: AgentRegistr
   return res.json();
 }
 
-/** Fetches system skills from the hub store (GET /api/sulalahub/system/registry). Used by Skills page "From Hub" tab to show system skills. */
+/** Fetches system skills from the hub store via gateway proxy to avoid CORS (hub may only allow localhost:5173, not 127.0.0.1:2026). */
 export async function fetchAgentSkillsSystemRegistry(): Promise<{ skills: AgentRegistrySkill[] }> {
   const systemUrl = getHubSystemRegistryUrl();
   if (!systemUrl) return { skills: [] };
-  const res = await fetch(systemUrl);
+  const url = `${GATEWAY_URL}/api/agent/skills/registry?url=${encodeURIComponent(systemUrl)}`;
+  const res = await fetch(url, { headers: headers() });
   if (!res.ok) throw new Error(`Failed to fetch system registry: ${res.status}`);
   return res.json();
 }
@@ -967,6 +787,23 @@ export async function fetchAgentSkillUninstall(
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `Uninstall failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function fetchAgentSkillUpload(
+  markdown: string,
+  slug?: string,
+  toolsYaml?: string
+): Promise<{ installed: string; path: string }> {
+  const res = await fetch(`${GATEWAY_URL}/api/agent/skills/upload`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ markdown, slug, toolsYaml: toolsYaml || undefined }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Upload failed: ${res.status}`);
   }
   return res.json();
 }

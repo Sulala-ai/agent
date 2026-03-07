@@ -4,7 +4,6 @@ import type { NavPage } from "@/components/app-sidebar";
 import { useOverview } from "@/features/overview";
 import { useSkills, SkillsPage } from "@/features/skills";
 import { useChat, ChatPage } from "@/features/chat";
-import { useIntegrations, IntegrationsPage } from "@/features/integrations";
 import { JobsPage } from "@/features/jobs";
 import { useConfig } from "@/features/config";
 import { SettingsPage } from "@/features/settings";
@@ -17,7 +16,7 @@ export default function App() {
   const [page, setPage] = useState<NavPage>(() => {
     if (typeof window === "undefined") return "chat";
     const p = new URLSearchParams(window.location.search).get("page");
-    const valid: NavPage[] = ["chat", "skills", "integrations", "jobs", "settings", "overview", "tasks", "logs", "files", "config"];
+    const valid: NavPage[] = ["chat", "skills", "jobs", "settings", "overview", "tasks", "logs", "files", "config"];
     return valid.includes(p as NavPage) ? (p as NavPage) : "chat";
   });
   const [error, setError] = useState<string | null>(null);
@@ -44,7 +43,6 @@ export default function App() {
   const chatState = useChat(page, (msg) => setError(msg), {
     onMissingIntegrations: (missing) => setMissingIntegrationsFromChat(missing),
   });
-  const integrationsState = useIntegrations(page, (msg) => setError(msg));
   const config = useConfig(page);
 
   useEffect(() => {
@@ -94,16 +92,14 @@ export default function App() {
       {page === "chat" && (
         <ChatPage
           {...chatState}
-          integrations={integrationsState.integrations}
-          onNavigateToIntegrations={() => onNavigate("integrations")}
+          integrations={[]}
+          onNavigateToIntegrations={() => onNavigate("skills")}
           missingIntegrationsFromServer={missingIntegrationsFromChat}
           onClearMissingIntegrationsFromServer={() => setMissingIntegrationsFromChat(null)}
         />
       )}
 
       {page === "skills" && <SkillsPage {...skillsState} />}
-
-      {page === "integrations" && <IntegrationsPage {...integrationsState} onError={(msg) => setError(msg)} />}
 
       {page === "jobs" && (
         <JobsPage

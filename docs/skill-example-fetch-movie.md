@@ -3,7 +3,7 @@
 This page shows **two patterns** for authoring skills:
 
 1. **API-key APIs** (this example) — use an env var (e.g. `TMDB_ACCESS_TOKEN`) and `run_command` with curl. User sets the token in Skills → config or `.env`.
-2. **Sulala integrations (Portal)** — use `list_integrations_connections` and `get_connection_token`; no API key in the skill. User connects the app in the Portal/dashboard. See [Integration example](#integration-example-gmail-style) below and `context/portal-integrations.md`, `context/gmail.md`.
+2. **Own OAuth (e.g. Gmail)** — document env vars (e.g. `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`) in the skill; user sets them in Skills → config. The skill instructs the agent to use `run_command` with curl and the token from env. See the Gmail skill in the hub for the full flow.
 
 ---
 
@@ -46,29 +46,4 @@ Use run_command with binary `curl` and args (e.g. `-s`, `-H`, `"Authorization: B
 
 Then in the dashboard: Skills → fetch-movie → set `TMDB_ACCESS_TOKEN`, and ensure `curl` is in ALLOWED_BINARIES.
 
----
-
-## Integration example (Gmail-style)
-
-If your skill uses a **Sulala/Portal-connected app** (Gmail, Calendar, Slack, GitHub, etc.), the user does **not** set an API key in the skill. They connect the app in the Portal (or dashboard → Integrations). The skill instructs the agent to:
-
-1. Call **list_integrations_connections** with `provider: "<name>"` (e.g. `"gmail"`, `"calendar"`) to get `connection_id`.
-2. Call **get_connection_token** with that `connection_id` to get an OAuth `accessToken`.
-3. Use **run_command** with `curl` to call the provider API, with header `Authorization: Bearer <accessToken>`.
-
-**Frontmatter** for an integration skill typically only requires `bins: ["curl"]` (no `env` for the provider token). Example:
-
-```markdown
----
-name: my-integration
-description: Use MyApp via the Portal. When the user asks about X, list connections with list_integrations_connections (provider myapp) and use run_command + curl.
-metadata:
-  { "sulala": { "requires": { "bins": ["curl"] } } }
----
-# My integration
-1. **list_integrations_connections** with `provider: "myapp"` → get `connection_id`.
-2. **get_connection_token** with that `connection_id` → get `accessToken`.
-3. **run_command (curl)** — call the provider API with `Authorization: Bearer <accessToken>`. Add required hosts to ALLOWED_CURL_HOSTS.
-```
-
-See **context/portal-integrations.md** and **context/gmail.md** (or calendar.md, slack.md) for full integration skill examples.
+For **own OAuth** skills (Gmail, etc.), see the Gmail skill: user sets `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, and after the first auth flow `GMAIL_REFRESH_TOKEN` in Skills → config; the skill doc describes building the auth URL, exchanging the code, and using `run_command` with curl against the provider API.

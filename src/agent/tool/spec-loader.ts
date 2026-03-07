@@ -34,7 +34,7 @@ const AUTH_REGISTRY: Record<
       return key?.trim() ? { headers: { Authorization: `Bearer ${key}` } } : null;
     },
     notConfiguredMessage:
-      'Stripe is not configured. Add a secret key in Settings → Payment or set STRIPE_SECRET_KEY.',
+      'Stripe is not configured. Set STRIPE_SECRET_KEY in .env or in the skill config.',
     label: 'Stripe',
     invalidKeyMessage: 'Invalid Stripe secret key (unauthorized)',
   },
@@ -260,8 +260,19 @@ function normalizeSingle(
   return out;
 }
 
-/** Get value from object by path "step0.id" or "step0". */
+/** Get value from object by path "step0.id" or "step0". Supports array filter: "connections[provider=gmail].connection_id". */
 function getPath(obj: Record<string, unknown>, path: string): unknown {
+  const filterMatch = path.match(/^(\w+)\[(\w+)=([^\]]+)\](?:\.(.+))?$/);
+  if (filterMatch) {
+    const [, arrayKey, filterField, filterVal, restPath] = filterMatch;
+    const arr = obj[arrayKey];
+    if (!Array.isArray(arr)) return undefined;
+    const decoded = filterVal.replace(/^["']|["']$/g, '');
+    const found = arr.find((item) => item && typeof item === 'object' && String((item as Record<string, unknown>)[filterField]) === decoded);
+    if (!found || typeof found !== 'object') return undefined;
+    if (!restPath) return (found as Record<string, unknown>).connection_id ?? (found as Record<string, unknown>).id;
+    return getPath(found as Record<string, unknown>, restPath);
+  }
   const parts = path.split('.');
   let cur: unknown = obj;
   for (const p of parts) {
@@ -599,7 +610,7 @@ function loadToolsYaml(dir: string): ToolSpec[] {
   }
 }
 
-/** Resolve context paths for tools.yaml: workspace skills (hub installs), agentContextPath/bundled, managed, then extra dirs. */
+/** Resolve context paths for tools.yaml: workspace skills (hub installs), agentContextPath, managed, then extra dirs. */
 function getContextDirs(config: Config): string[] {
   const cwd = process.cwd();
   const dirs: string[] = [];
@@ -611,8 +622,6 @@ function getContextDirs(config: Config): string[] {
   }
   if (config.agentContextPath?.trim()) {
     dirs.push(resolve(cwd, config.agentContextPath.trim()));
-  } else if (config.skillsBundledDir?.trim()) {
-    dirs.push(config.skillsBundledDir.trim());
   }
   if (config.skillsManagedDir?.trim()) {
     dirs.push(config.skillsManagedDir.trim());

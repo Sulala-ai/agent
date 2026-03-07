@@ -259,6 +259,59 @@ export async function installSkillFromUrl(
   }
 }
 
+const SLUG_REGEX = /^[a-z0-9-]+$/;
+
+function slugifyName(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '') || 'uploaded-skill';
+}
+
+/**
+ * Upload a skill from markdown content. Writes to workspace skills dir (~/.sulala/workspace/skills/<slug>/README.md).
+ * Optionally writes tools.yaml to the same folder. Use for quick testing without submitting to the hub.
+ */
+export function uploadSkill(
+  markdown: string,
+  slugOverride?: string,
+  toolsYaml?: string
+): { success: boolean; path: string; slug?: string; error?: string } {
+  const content = (markdown || '').trim();
+  if (!content) {
+    return { success: false, path: '', error: 'Empty markdown' };
+  }
+  let slug = typeof slugOverride === 'string' ? slugOverride.trim().toLowerCase() : '';
+  if (!slug) {
+    const nameMatch = content.match(/^name:\s*(.+)$/m);
+    const name = nameMatch ? nameMatch[1].trim().replace(/^['"]|['"]$/g, '') : '';
+    slug = slugifyName(name);
+  }
+  slug = slug.replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  if (!slug) slug = 'uploaded-skill';
+  if (!SLUG_REGEX.test(slug)) {
+    return { success: false, path: '', error: `Invalid slug: ${slug}` };
+  }
+  const dir = getWorkspaceSkillsDir();
+  const skillDir = join(dir, slug);
+  const destPath = join(skillDir, 'README.md');
+  try {
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(destPath, content, 'utf8');
+    if (toolsYaml && typeof toolsYaml === 'string' && toolsYaml.trim()) {
+      writeFileSync(join(skillDir, 'tools.yaml'), toolsYaml.trim(), 'utf8');
+    }
+    return { success: true, path: destPath, slug };
+  } catch (e) {
+    return {
+      success: false,
+      path: '',
+      error: `Failed to write skill: ${(e as Error).message}`,
+    };
+  }
+}
+
 export function uninstallSkill(
   slug: string,
   target: InstallTarget

@@ -6,7 +6,7 @@ import { join, resolve, sep } from 'path';
 import { randomBytes } from 'crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
 import cors from 'cors';
-import { config, getSulalaEnvPath, getPortalGatewayBase, getEffectivePortalApiKey, getSulalaEnvKey } from '../config.js';
+import { config, getSulalaEnvPath, getSulalaEnvKey } from '../config.js';
 import { readOnboardEnvKeys, writeOnboardEnvKeys } from '../onboard-env.js';
 import {
   initDb,
@@ -36,13 +36,12 @@ import {
 import { scheduleCronById, unscheduleJob } from '../scheduler/cron.js';
 import { getTelegramChannelState, setTelegramChannelConfig } from '../channels/telegram.js';
 import { getDiscordChannelState, setDiscordChannelConfig } from '../channels/discord.js';
-import { getEffectiveStripeSecretKey, getStripeChannelState, setStripeChannelConfig } from '../channels/stripe.js';
 import { reloadProviders } from '../ai/orchestrator.js';
 import { runAgentTurn, runAgentTurnStream } from '../agent/loop.js';
 import { runAgentTurnWithPi, isPiAvailable } from '../agent/pi-runner.js';
 import { listTools, executeTool } from '../agent/tools.js';
 import { listSkills, getAllRequiredBins } from '../agent/skills.js';
-import { getRegistrySkills, getAvailableUpdates, installSkill, uninstallSkill, updateSkillsAll, installAllSystemSkills } from '../agent/skill-install.js';
+import { getRegistrySkills, getAvailableUpdates, installSkill, uninstallSkill, updateSkillsAll, installAllSystemSkills, uploadSkill } from '../agent/skill-install.js';
 import { getTemplates } from '../agent/skill-templates.js';
 import { generateSkillSpec, writeGeneratedSkill, WIZARD_APPS, WIZARD_TRIGGERS } from '../agent/skill-generate.js';
 import { loadSkillsConfig, saveSkillsConfig, getConfigPath, setSkillEnabled, removeSkillEntry, migrateConfigNameKeysToSlug, getOnboardingComplete, setOnboardingComplete } from '../agent/skills-config.js';
@@ -77,9 +76,6 @@ function rateLimitMiddleware(req: Request, res: Response, next: () => void): voi
   if (req.method === 'GET' && req.path.startsWith('/api/')) return next();
   // Bootstrap / auth endpoints
   if (req.path.startsWith('/api/onboard')) return next();
-  if (req.path === '/api/integrations/connect' && req.method === 'POST') return next();
-  if (req.path.startsWith('/api/integrations/connections/') && req.method === 'DELETE') return next();
-  if (req.path === '/api/oauth/connect-url' && req.method === 'GET') return next();
   if (req.path === '/api/oauth/callback' && req.method === 'GET') return next();
   const ip = (req.ip || req.socket?.remoteAddress || 'unknown') as string;
   const now = Date.now();
@@ -243,7 +239,7 @@ export function createGateway(appMount: Express | null = null): Express {
     }
   });
 
-  /** Onboard: mark onboarding as complete. Installs all system skills to workspace/skills in the background when SKILLS_REGISTRY_URL is set. */
+  /** Onboard: mark onboarding as complete. Optionally installs skills from hub (SKILLS_REGISTRY_URL) to workspace/skills in the background. */
   app.put('/api/onboard/complete', async (_req: Request, res: Response) => {
     try {
       setOnboardingComplete(true);
@@ -251,10 +247,10 @@ export function createGateway(appMount: Express | null = null): Express {
       res.json({ ok: true, complete: true });
       installAllSystemSkills()
         .then(({ installed, failed }) => {
-          if (installed.length) log('gateway', 'info', `Onboard: installed ${installed.length} system skill(s): ${installed.join(', ')}`);
-          if (failed.length) log('gateway', 'warn', `Onboard: failed to install ${failed.length} system skill(s): ${failed.map((f) => f.slug).join(', ')}`);
+          if (installed.length) log('gateway', 'info', `Onboard: installed ${installed.length} skill(s) from hub: ${installed.join(', ')}`);
+          if (failed.length) log('gateway', 'warn', `Onboard: failed to install ${failed.length} skill(s): ${failed.map((f) => f.slug).join(', ')}`);
         })
-        .catch((e) => log('gateway', 'error', `Onboard: system skills install failed: ${(e as Error).message}`));
+        .catch((e) => log('gateway', 'error', `Onboard: hub skills install failed: ${(e as Error).message}`));
     } catch (e) {
       log('gateway', 'error', (e as Error).message);
       res.status(500).json({ error: (e as Error).message });
@@ -477,153 +473,20 @@ export function createGateway(appMount: Express | null = null): Express {
     }
   });
 
-  app.get('/api/channels/stripe', (_req: Request, res: Response) => {
-    try {
-      const state = getStripeChannelState();
-      res.json(state);
-    } catch (e) {
-      log('gateway', 'error', (e as Error).message);
-      res.status(500).json({ error: (e as Error).message });
-    }
-  });
-
-  app.put('/api/channels/stripe', async (req: Request, res: Response) => {
-    try {
-      const { secretKey } = req.body || {};
-      const result = await setStripeChannelConfig({
-        secretKey: secretKey !== undefined ? (typeof secretKey === 'string' ? secretKey : null) : undefined,
-      });
-      if (!result.ok) {
-        res.status(400).json({ error: result.error || 'Failed to save' });
-        return;
-      }
-      // Persist to ~/.sulala/.env so the key is visible there and survives across DB resets
-      const effective = getEffectiveStripeSecretKey();
-      writeOnboardEnvKeys({ STRIPE_SECRET_KEY: effective ?? '' });
-      const state = getStripeChannelState();
-      res.json(state);
-    } catch (e) {
-      log('gateway', 'error', (e as Error).message);
-      res.status(500).json({ error: (e as Error).message });
-    }
-  });
-
-  /** Returns connected integration provider ids (from Portal). When Portal is not configured, returns []. */
-  async function getConnectedIntegrationIds(): Promise<string[]> {
-    const base = getPortalGatewayBase();
-    const key = getEffectivePortalApiKey();
-    if (!base || !key) return [];
-    try {
-      const portalRes = await fetch(`${base}/connections`, {
-        headers: { Authorization: `Bearer ${key}` },
-      });
-      if (!portalRes.ok) return [];
-      const data = (await portalRes.json()) as {
-        connections?: Array<{ provider?: string }>;
-      };
-      const raw = data.connections ?? [];
-      const ids = new Set<string>();
-      for (const c of raw) {
-        const p = (c.provider ?? '').trim();
-        if (p) ids.add(p);
-      }
-      return Array.from(ids);
-    } catch {
-      return [];
-    }
-  }
-
-  /** GET /api/integrations/connections — When Portal is configured, proxy list from Portal (dashboard can show connections like direct mode). */
-  app.get('/api/integrations/connections', async (_req: Request, res: Response) => {
-    try {
-      const base = getPortalGatewayBase();
-      const key = getEffectivePortalApiKey();
-      if (!base || !key) {
-        res.status(404).json({ error: 'Portal not configured', connections: [] });
-        return;
-      }
-      const portalRes = await fetch(`${base}/connections`, {
-        headers: { Authorization: `Bearer ${key}` },
-      });
-      if (!portalRes.ok) {
-        const text = await portalRes.text();
-        let err = `Portal: ${portalRes.status}`;
-        try {
-          const j = JSON.parse(text) as { error?: string };
-          if (j.error) err = j.error;
-        } catch {
-          if (text) err = text.slice(0, 200);
-        }
-        res.status(portalRes.status >= 500 ? 502 : portalRes.status).json({ error: err, connections: [] });
-        return;
-      }
-      const data = (await portalRes.json()) as { connections?: Array<{ connection_id?: string; id?: string; provider?: string; created_at?: number | string }> };
-      const raw = data.connections ?? [];
-      const connections = raw.map((c) => {
-        const created = c.created_at;
-        const createdAt = typeof created === 'number' ? created : created ? new Date(created).getTime() : 0;
-        return {
-          id: c.connection_id ?? c.id ?? '',
-          provider: c.provider ?? '',
-          scopes: [] as string[],
-          createdAt,
-          updatedAt: undefined as number | undefined,
-        };
-      });
-      res.json({ connections });
-    } catch (e) {
-      log('gateway', 'error', (e as Error).message);
-      res.status(500).json({ error: (e as Error).message, connections: [] });
-    }
-  });
-
-  /** POST /api/integrations/connect — When Portal configured, start OAuth via Portal. Body: { provider, redirect_success }. Returns { authUrl, connectionId }. */
-  app.post('/api/integrations/connect', async (req: Request, res: Response) => {
-    try {
-      const base = getPortalGatewayBase();
-      const key = getEffectivePortalApiKey();
-      if (!base || !key) {
-        res.status(404).json({ error: 'Portal not configured' });
-        return;
-      }
-      const body = req.body as { provider?: string; redirect_success?: string };
-      const provider = typeof body?.provider === 'string' ? body.provider.trim() : '';
-      if (!provider) {
-        res.status(400).json({ error: 'provider required' });
-        return;
-      }
-      const portalRes = await fetch(`${base}/connect`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-        body: JSON.stringify({ provider, redirect_success: body.redirect_success || undefined }),
-      });
-      const text = await portalRes.text();
-      if (!portalRes.ok) {
-        let err = `Portal: ${portalRes.status}`;
-        try {
-          const j = JSON.parse(text) as { error?: string };
-          if (j.error) err = j.error;
-        } catch {
-          if (text) err = text.slice(0, 200);
-        }
-        res.status(portalRes.status >= 500 ? 502 : portalRes.status).json({ error: err });
-        return;
-      }
-      const data = JSON.parse(text) as { authUrl?: string; connectionId?: string };
-      if (!data.authUrl) {
-        res.status(502).json({ error: 'No authUrl from Portal' });
-        return;
-      }
-      res.json({ authUrl: data.authUrl, connectionId: data.connectionId ?? null });
-    } catch (e) {
-      log('gateway', 'error', (e as Error).message);
-      res.status(500).json({ error: (e as Error).message });
-    }
-  });
-
   /** GET /api/mcp/config — MCP servers config for dashboard (env values redacted). */
   app.get('/api/mcp/config', (_req: Request, res: Response) => {
     try {
+      res.json(getMcpConfigForDisplay());
+    } catch (e) {
+      log('gateway', 'error', (e as Error).message);
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
+  /** POST /api/mcp/reload — Re-read mcp.json (or MCP_SERVERS env) and reload MCP tools. Use after editing ~/.sulala/mcp.json by hand so changes take effect without restarting the agent. */
+  app.post('/api/mcp/reload', async (_req: Request, res: Response) => {
+    try {
+      await refreshMcpTools();
       res.json(getMcpConfigForDisplay());
     } catch (e) {
       log('gateway', 'error', (e as Error).message);
@@ -734,152 +597,34 @@ export function createGateway(appMount: Express | null = null): Express {
     }
   });
 
-  /** DELETE /api/integrations/connections/:id — When Portal configured, disconnect via Portal. */
-  app.delete('/api/integrations/connections/:id', async (req: Request, res: Response) => {
-    try {
-      const base = getPortalGatewayBase();
-      const key = getEffectivePortalApiKey();
-      if (!base || !key) {
-        res.status(404).json({ error: 'Portal not configured' });
-        return;
-      }
-      const rawId = req.params?.id;
-      const id = Array.isArray(rawId) ? rawId[0] : rawId;
-      if (!id || typeof id !== 'string') {
-        res.status(400).json({ error: 'connection id required' });
-        return;
-      }
-      const portalRes = await fetch(`${base}/connections/${encodeURIComponent(id)}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${key}` },
-      });
-      if (!portalRes.ok) {
-        const text = await portalRes.text();
-        let err = `Portal: ${portalRes.status}`;
-        try {
-          const j = JSON.parse(text) as { error?: string };
-          if (j.error) err = j.error;
-        } catch {
-          if (text) err = text.slice(0, 200);
-        }
-        res.status(portalRes.status >= 500 ? 502 : portalRes.status).json({ error: err });
-        return;
-      }
-      res.json({ ok: true });
-    } catch (e) {
-      log('gateway', 'error', (e as Error).message);
-      res.status(500).json({ error: (e as Error).message });
+  /** GET /api/oauth/callback — Skill-owned OAuth (e.g. Gmail): show code page so user can paste in chat. state=gmail or any callback with code. */
+  app.get('/api/oauth/callback', (req: Request, res: Response) => {
+    const code = (req.query.code as string)?.trim() || '';
+    const error = (req.query.error as string)?.trim() || '';
+    const state = (req.query.state as string)?.trim() || '';
+    const isGmailFlow = state === 'gmail' || state.startsWith('gmail-');
+    if (isGmailFlow || code) {
+      const html = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OAuth code</title>
+<style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:2rem auto;padding:0 1rem;} pre{background:#f1f5f9;padding:1rem;border-radius:0.5rem;overflow:auto;} .copy{background:#0ea5e9;color:#fff;border:none;padding:0.5rem 1rem;border-radius:0.5rem;cursor:pointer;margin-top:0.5rem;} .copy:hover{background:#0284c7;} .err{color:#b91c1c;}</style>
+</head>
+<body>
+${error ? `<p class="err"><strong>Error:</strong> ${error.replace(/</g, '&lt;')}</p><p>Check your OAuth client and redirect URI.</p>` : ''}
+${code ? `<h2>Copy this code</h2><p>Paste it in the chat where the assistant asked for the authorization code.</p><pre id="code">${code.replace(/</g, '&lt;')}</pre><button class="copy" onclick="navigator.clipboard.writeText(document.getElementById('code').innerText)">Copy code</button>` : ''}
+${!code && !error ? '<p>No code or error in the URL. Go back to the chat and open the authorization link again.</p>' : ''}
+</body>
+</html>`;
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.send(html);
+      return;
     }
-  });
-
-  /** GET /api/oauth/connect-url — Build Portal "Connect with Sulala" URL for dashboard. Requires PORTAL_GATEWAY_URL, PORTAL_OAUTH_CLIENT_ID; redirect_uri = this gateway base + /api/oauth/callback. Optional return_to encoded in state for callback redirect. */
-  app.get('/api/oauth/connect-url', (req: Request, res: Response) => {
-    try {
-      const portalGateway = getPortalGatewayBase();
-      const portalBase = portalGateway ? portalGateway.replace(/\/api\/gateway$/i, '') : '';
-      const clientId = (process.env.PORTAL_OAUTH_CLIENT_ID || '').trim();
-      if (!portalBase || !clientId) {
-        res.status(503).json({
-          error: 'OAuth not configured',
-          hint: 'Set PORTAL_GATEWAY_URL and PORTAL_OAUTH_CLIENT_ID (and PORTAL_OAUTH_CLIENT_SECRET for callback). Register redirect_uri in the Portal.',
-        });
-        return;
-      }
-      const proto = (req.headers['x-forwarded-proto'] as string) || (req.secure ? 'https' : 'http');
-      const host = (req.headers['x-forwarded-host'] as string) || req.headers.host || '';
-      const publicBase = (process.env.PUBLIC_URL || process.env.GATEWAY_PUBLIC_URL || '').trim() || `${proto}://${host}`;
-      const callbackUrl = `${publicBase.replace(/\/$/, '')}/api/oauth/callback`;
-      const return_to = (req.query.return_to as string)?.trim() || undefined;
-      const statePayload = JSON.stringify({ r: randomBytes(12).toString('base64url'), return_to });
-      const state = Buffer.from(statePayload, 'utf8').toString('base64url');
-      const url = `${portalBase}/connect?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(callbackUrl)}&state=${encodeURIComponent(state)}`;
-      res.json({ url });
-    } catch (e) {
-      log('gateway', 'error', (e as Error).message);
-      res.status(500).json({ error: (e as Error).message });
-    }
-  });
-
-  function parseOAuthReturnTo(req: Request): string | undefined {
-    try {
-      const stateRaw = (req.query.state as string) || '';
-      const statePayload = JSON.parse(Buffer.from(stateRaw, 'base64url').toString('utf8'));
-      if (statePayload && typeof statePayload.return_to === 'string' && statePayload.return_to.trim()) {
-        return statePayload.return_to.trim();
-      }
-    } catch {
-      /* state may be legacy random string */
-    }
-    return undefined;
-  }
-
-  /** GET /api/oauth/callback — Portal redirects here with code & state. Exchange for access token, save as PORTAL_API_KEY, redirect to dashboard. */
-  app.get('/api/oauth/callback', async (req: Request, res: Response) => {
     const dashboardOrigin = (req.headers['x-forwarded-proto'] ? `${req.headers['x-forwarded-proto']}://${req.headers['x-forwarded-host']}` : null) || (req.headers.origin || `${req.protocol}://${req.get('host')}`);
-    const return_to = parseOAuthReturnTo(req);
-    const returnFragment = return_to ? `&return_to=${encodeURIComponent(return_to)}` : '';
-    try {
-      const code = (req.query.code as string) || '';
-      const portalGateway = getPortalGatewayBase();
-      const portalBase = portalGateway ? portalGateway.replace(/\/api\/gateway$/i, '') : '';
-      const clientId = (process.env.PORTAL_OAUTH_CLIENT_ID || '').trim();
-      const clientSecret = (process.env.PORTAL_OAUTH_CLIENT_SECRET || '').trim();
-      if (!code || !portalBase || !clientId || !clientSecret) {
-        res.redirect(302, `${dashboardOrigin || '/'}/?page=integrations&oauth=error&message=missing_config${returnFragment}`);
-        return;
-      }
-      const proto = (req.headers['x-forwarded-proto'] as string) || (req.secure ? 'https' : 'http');
-      const host = (req.headers['x-forwarded-host'] as string) || req.headers.host || '';
-      const publicBase = (process.env.PUBLIC_URL || process.env.GATEWAY_PUBLIC_URL || '').trim() || `${proto}://${host}`;
-      const redirectUri = `${publicBase.replace(/\/$/, '')}/api/oauth/callback`;
-      const tokenRes = await fetch(`${portalBase}/api/oauth/token`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          grant_type: 'authorization_code',
-          code,
-          client_id: clientId,
-          client_secret: clientSecret,
-          redirect_uri: redirectUri,
-        }),
-      });
-      const tokenText = await tokenRes.text();
-      if (!tokenRes.ok) {
-        log('gateway', 'error', `OAuth token exchange failed: ${tokenRes.status} ${tokenText}`);
-        res.redirect(302, `${dashboardOrigin || '/'}/?page=integrations&oauth=error&message=exchange_failed${returnFragment}`);
-        return;
-      }
-      let tokenData: { access_token?: string };
-      try {
-        tokenData = JSON.parse(tokenText);
-      } catch {
-        res.redirect(302, `${dashboardOrigin || '/'}/?page=integrations&oauth=error&message=invalid_response${returnFragment}`);
-        return;
-      }
-      const accessToken = tokenData.access_token?.trim();
-      if (!accessToken) {
-        res.redirect(302, `${dashboardOrigin || '/'}/?page=integrations&oauth=error&message=no_token${returnFragment}`);
-        return;
-      }
-      writeOnboardEnvKeys({ PORTAL_API_KEY: accessToken });
-      res.redirect(302, `${dashboardOrigin || '/'}/?page=integrations&oauth=success${returnFragment}`);
-    } catch (e) {
-      log('gateway', 'error', (e as Error).message);
-      const dashboardOrigin = (req.headers.origin || (req.headers['x-forwarded-proto'] && req.headers['x-forwarded-host'] ? `${req.headers['x-forwarded-proto']}://${req.headers['x-forwarded-host']}` : null) || `${req.protocol}://${req.get('host')}`);
-      const return_to = parseOAuthReturnTo(req);
-      const returnFragment = return_to ? `&return_to=${encodeURIComponent(return_to)}` : '';
-      res.redirect(302, `${dashboardOrigin || '/'}/?page=integrations&oauth=error&message=server_error${returnFragment}`);
-    }
+    res.redirect(302, `${dashboardOrigin || '/'}/?oauth=error&message=missing_config`);
   });
 
   app.get('/api/config', (_req: Request, res: Response) => {
     try {
-      const portalUrl = getPortalGatewayBase();
-      const portalKey = getEffectivePortalApiKey();
-      const portalSet = !!(portalUrl && portalKey);
-      const directSet = !!config.integrationsUrl?.trim();
-      const integrationsMode = portalSet ? 'portal' : directSet ? 'direct' : null;
-      const portalOAuthClientId = (process.env.PORTAL_OAUTH_CLIENT_ID || '').trim();
       const mcpOAuthEnabled = ((getSulalaEnvKey('MCP_OAUTH_ENABLED') || '').toLowerCase() === '1' || (getSulalaEnvKey('MCP_OAUTH_ENABLED') || '').toLowerCase() === 'true');
       const mcpOAuthResourceUrl = (getSulalaEnvKey('MCP_OAUTH_RESOURCE_URL') || '').trim();
       const mcpOAuthAuthServer = (getSulalaEnvKey('MCP_OAUTH_AUTHORIZATION_SERVER') || '').trim();
@@ -888,14 +633,6 @@ export function createGateway(appMount: Express | null = null): Express {
         watchFolders: config.watchFolders || [],
         agentUsePi: config.agentUsePi,
         piAvailable: isPiAvailable(),
-        /** When set, dashboard can use this for Integrations page instead of VITE_INTEGRATIONS_URL. */
-        integrationsUrl: config.integrationsUrl || null,
-        /** 'portal' = agent uses Portal for connections; 'direct' = agent uses INTEGRATIONS_URL; null = neither. */
-        integrationsMode,
-        portalGatewayUrl: portalUrl || config.portalGatewayUrl || null,
-        /** When set, dashboard can show "Connect with Sulala (OAuth)" and use /api/oauth/connect-url. */
-        portalOAuthConnectAvailable: !!(portalUrl && portalOAuthClientId),
-        /** ChatGPT Apps SDK / MCP OAuth 2.1: config for onboarding and settings. */
         chatgptOAuth: {
           enabled: mcpOAuthEnabled,
           resourceUrl: mcpOAuthResourceUrl || null,
@@ -1179,6 +916,28 @@ export function createGateway(appMount: Express | null = null): Express {
         res.status(201).json({ installed: slug, path: result.path, target: t });
       } else {
         res.status(400).json({ error: result.error || 'Install failed' });
+      }
+    } catch (e) {
+      log('gateway', 'error', (e as Error).message);
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
+  /** Upload a skill from markdown (quick test without hub). */
+  app.post('/api/agent/skills/upload', async (req: Request, res: Response) => {
+    try {
+      const { markdown, slug, toolsYaml } = req.body || {};
+      if (!markdown || typeof markdown !== 'string') {
+        res.status(400).json({ error: 'markdown required' });
+        return;
+      }
+      const tools = typeof toolsYaml === 'string' && toolsYaml.trim() ? toolsYaml.trim() : undefined;
+      const result = uploadSkill(markdown, typeof slug === 'string' ? slug : undefined, tools);
+      if (result.success && result.slug) {
+        setSkillEnabled(result.slug, true);
+        res.status(201).json({ installed: result.slug, path: result.path });
+      } else {
+        res.status(400).json({ error: result.error || 'Upload failed' });
       }
     } catch (e) {
       log('gateway', 'error', (e as Error).message);
@@ -1532,25 +1291,10 @@ export function createGateway(appMount: Express | null = null): Express {
     }
     const controller = new AbortController();
     req.on('close', () => controller.abort());
-    const { message, system_prompt, provider, model, max_tokens, timeout_ms, use_pi, required_integrations, attachment_urls } = req.body || {};
+    const { message, system_prompt, provider, model, max_tokens, timeout_ms, use_pi, attachment_urls } = req.body || {};
     const urls = Array.isArray(attachment_urls) ? (attachment_urls as string[]).filter((u) => typeof u === 'string' && u.trim()) : [];
     const userMessageText = typeof message === 'string' ? message : '';
     const fullUserMessage = urls.length > 0 ? `${userMessageText}\n\n[Attached media — use these URLs when posting images (e.g. Facebook) or when uploading video to YouTube (pass as video_url to youtube_upload): ${urls.join(', ')}]` : userMessageText;
-    const required = Array.isArray(required_integrations)
-      ? (required_integrations as string[]).filter((k) => typeof k === 'string' && k.trim())
-      : [];
-    if (required.length > 0) {
-      const connected = await getConnectedIntegrationIds();
-      const missing = required.filter((k) => !connected.includes(k));
-      if (missing.length > 0) {
-        res.status(422).json({
-          type: 'missing_integrations',
-          error: 'Missing required integrations',
-          missing,
-        });
-        return;
-      }
-    }
     const timeoutMs = typeof timeout_ms === 'number' ? timeout_ms : config.agentTimeoutMs || 0;
     let usePi = config.agentUsePi || use_pi === true || use_pi === '1';
     if (usePi && !isPiAvailable()) usePi = false;
@@ -1601,21 +1345,6 @@ export function createGateway(appMount: Express | null = null): Express {
     if (!session) {
       res.status(404).json({ error: 'Session not found' });
       return;
-    }
-    const bodyRequired = Array.isArray((req.body as { required_integrations?: string[] })?.required_integrations)
-      ? ((req.body as { required_integrations: string[] }).required_integrations.filter((k) => typeof k === 'string' && k.trim()))
-      : [];
-    if (bodyRequired.length > 0) {
-      const connected = await getConnectedIntegrationIds();
-      const missing = bodyRequired.filter((k) => !connected.includes(k));
-      if (missing.length > 0) {
-        res.status(422).json({
-          type: 'missing_integrations',
-          error: 'Missing required integrations',
-          missing,
-        });
-        return;
-      }
     }
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -2071,51 +1800,8 @@ export function createGateway(appMount: Express | null = null): Express {
   type TokenResult =
     | { ok: true; accessToken: string }
     | { ok: false; status: number; error: string };
-  const getConnectionToken = async (connectionId: string): Promise<TokenResult> => {
-    const portalBase = getPortalGatewayBase();
-    const portalKey = getEffectivePortalApiKey();
-    const integrationsBase = config.integrationsUrl?.replace(/\/$/, '');
-    const integrationsSecret = (process.env.INTEGRATIONS_API_SECRET || '').trim();
-    const useUrl =
-      integrationsBase && integrationsSecret
-        ? `${integrationsBase}/connections/${encodeURIComponent(connectionId)}/use`
-        : portalBase && portalKey
-          ? `${portalBase.replace(/\/$/, '')}/connections/${encodeURIComponent(connectionId)}/use`
-          : null;
-    if (!useUrl) return { ok: false, status: 503, error: 'Set PORTAL_GATEWAY_URL and PORTAL_API_KEY (or INTEGRATIONS_URL and INTEGRATIONS_API_SECRET).' };
-    const useRes = await fetch(useUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(integrationsBase && integrationsSecret
-          ? { Authorization: `Bearer ${integrationsSecret}`, 'X-Integrations-Api-Secret': integrationsSecret }
-          : { Authorization: `Bearer ${portalKey}` }),
-      },
-    });
-    const useText = await useRes.text();
-    if (!useRes.ok) {
-      let errMsg = useText || 'Failed to get token';
-      try {
-        const parsed = JSON.parse(useText) as { error?: string };
-        if (typeof parsed?.error === 'string') errMsg = parsed.error;
-      } catch {
-        // keep errMsg as useText
-      }
-      if (useRes.status === 404) {
-        errMsg += ' Ensure the integration is connected in the Portal for the same account that owns the API key (Settings → API Keys), and use the connection_id from list_integrations_connections.';
-      }
-      return { ok: false, status: useRes.status, error: errMsg };
-    }
-    let useJson: { accessToken?: string };
-    try {
-      useJson = JSON.parse(useText) as { accessToken?: string };
-    } catch {
-      return { ok: false, status: 502, error: 'Invalid token response' };
-    }
-    if (!useJson?.accessToken || typeof useJson.accessToken !== 'string') {
-      return { ok: false, status: 502, error: 'Token response missing accessToken' };
-    }
-    return { ok: true, accessToken: useJson.accessToken };
+  const getConnectionToken = async (_connectionId: string): Promise<TokenResult> => {
+    return { ok: false, status: 503, error: 'Centralized integrations have been removed. Use skills with own OAuth (e.g. Gmail skill) or MCP.' };
   };
   const resolveFileFromRef = async (
     fileUrl: string,

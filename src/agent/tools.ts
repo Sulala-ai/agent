@@ -6,7 +6,7 @@ import { insertTask, getOrCreateAgentSession, insertScheduledJob, getScheduledJo
 import { scheduleCronById } from '../scheduler/cron.js';
 import { parseJobFromMessage } from './job-parse.js';
 import { getEffectiveTelegramConfig } from '../channels/telegram.js';
-import { config, getPortalGatewayBase, getEffectivePortalApiKey } from '../config.js';
+import { config, getPortalGatewayBase } from '../config.js';
 import { registerSpecTools } from './tool/spec-loader.js';
 import {
   appendMemory,
@@ -131,9 +131,7 @@ const PROFILE_TOOLS: Record<string, Set<string>> = {
   messaging: new Set([
     'run_task',
     'run_command',
-    'list_integrations_connections',
     'list_mcp_servers',
-    'get_connection_token',
     'write_memory',
     'read_memory',
   ]),
@@ -142,9 +140,7 @@ const PROFILE_TOOLS: Record<string, Set<string>> = {
     'read_file',
     'write_file',
     'run_command',
-    'list_integrations_connections',
     'list_mcp_servers',
-    'get_connection_token',
     'write_memory',
     'read_memory',
   ]),
@@ -201,7 +197,7 @@ export function registerBuiltInTools(enqueueTask: (taskId: string) => void): voi
   registerTool({
     name: 'run_task',
     description:
-      'Enqueue a background task by type and optional payload. Use ONLY for system/scheduled task types (e.g. heartbeat, file_event, agent_job). Do NOT use for user-requested immediate results: for read/summarize email, list calendar, create invoice, or similar, use the integration tools (list_integrations_connections, get_connection_token, run_command, stripe_*) and return the result in this turn.',
+      'Enqueue a background task by type and optional payload. Use ONLY for system/scheduled task types (e.g. heartbeat, file_event, agent_job). Do NOT use for user-requested immediate results: for read/summarize email, list calendar, create invoice, or similar, use MCP tools or run_command with skill OAuth (e.g. Gmail skill) and return the result in this turn.',
     parameters: {
       type: 'object',
       properties: {
@@ -242,17 +238,7 @@ export function registerBuiltInTools(enqueueTask: (taskId: string) => void): voi
         if (!binary) return { error: 'binary is required' };
         const rawArgs = Array.isArray(args.args) ? args.args : [];
         let argsList = rawArgs.map((a) => String(a).replace(/\0/g, '').trim()).filter((_, i) => i < 50);
-        // Expand $PORTAL_GATEWAY_URL and $PORTAL_API_KEY in args (no shell in spawnSync, so LLM's $VAR stays literal and curl gets "Couldn't resolve host")
-        const portalGatewayBase = getPortalGatewayBase() || process.env.PORTAL_GATEWAY_URL || '';
-        const portalApiKey = getEffectivePortalApiKey() || process.env.PORTAL_API_KEY || '';
-        if (portalGatewayBase || portalApiKey) {
-          argsList = argsList.map((a) => {
-            let s = a;
-            if (portalGatewayBase && s.includes('$PORTAL_GATEWAY_URL')) s = s.replace(/\$PORTAL_GATEWAY_URL/g, portalGatewayBase);
-            if (portalApiKey && s.includes('$PORTAL_API_KEY')) s = s.replace(/\$PORTAL_API_KEY/g, portalApiKey);
-            return s;
-          });
-        }
+        const portalGatewayBase = getPortalGatewayBase();
         // Resolve portal gateway URLs for curl: .../connections/conn_xxx/use, .../bsky-request, .../youtube-upload
         if (binary === 'curl' && portalGatewayBase && argsList.length > 0) {
           const argsStr = argsList.join(' ');
@@ -352,7 +338,7 @@ export function registerBuiltInTools(enqueueTask: (taskId: string) => void): voi
             const is401 = stdout.includes('401') && (stdout.includes('invalid authentication') || stdout.includes('invalid credentials'));
             if (isGoogleApi && is401) {
               (out as Record<string, unknown>)._hint =
-                'Gmail/Calendar/Google API returned 401. Get an OAuth token first: call get_connection_token(connection_id) with the connection_id from list_integrations_connections, then call the Gmail/API URL again with -H "Authorization: Bearer <accessToken>" using the token from that result.';
+                'Gmail/Calendar/Google API returned 401. Use the skill\'s own OAuth (e.g. Gmail skill with GMAIL_REFRESH_TOKEN) or MCP; get a token and call the API with Authorization: Bearer <token>.';
             }
           }
           return out;
@@ -609,92 +595,6 @@ export function registerBuiltInTools(enqueueTask: (taskId: string) => void): voi
     },
   });
 
-  function filterByProvider(
-    list: Array<{ connection_id?: string; id?: string; provider: string }>,
-    provider: string | undefined,
-  ): Array<{ connection_id: string; provider: string }> {
-    if (!provider) return list.map((c) => ({ connection_id: c.connection_id ?? c.id ?? '', provider: c.provider }));
-    const p = provider.toLowerCase();
-    const filtered = list.filter((c) => (c.provider || '').toLowerCase() === p);
-    return filtered.map((c) => ({ connection_id: c.connection_id ?? c.id ?? '', provider: c.provider }));
-  }
-
-  /** List OAuth connections only (calendar, gmail, drive, github, slack, etc.). Not for Stripe or Discord—use stripe_list_customers / discord_* instead. */
-  registerTool({
-    name: 'list_integrations_connections',
-    description:
-      'OAuth integrations only (calendar, gmail, drive, docs, sheets, slides, github, slack, notion, linear, zoom, trello, twitter, microsoft, zendesk, youtube). Returns connection_id and provider. Do NOT call if a matching mcp_* tool exists (e.g. mcp_bluesky_*, mcp_twitter_*, mcp_gmail_*)—use the MCP tool directly; it works without Portal. Call only when you need connection_id for integration tools (bluesky_post, x_post, etc.) and no mcp_* alternative exists. Do NOT use for Stripe or Discord—for Stripe use stripe_list_customers; for Discord use discord_list_guilds / discord_send_message. Requires PORTAL_GATEWAY_URL + PORTAL_API_KEY or INTEGRATIONS_URL.',
-    profile: 'full',
-    parameters: {
-      type: 'object',
-      properties: {
-        provider: {
-          type: 'string',
-          description: 'Exact provider to filter: "calendar", "gmail", "drive", "docs", "sheets", "slides", "github", "slack", "notion", "linear", "zoom", "trello", "twitter", "microsoft", "zendesk", etc. Optional; omit to list all.',
-        },
-      },
-      required: [],
-    },
-    execute: async (args) => {
-      const portalGatewayBase = getPortalGatewayBase();
-      const portalKey = getEffectivePortalApiKey();
-      const provider = typeof args.provider === 'string' ? args.provider.trim() : undefined;
-
-      if (portalGatewayBase && portalKey) {
-        try {
-          const res = await fetch(`${portalGatewayBase}/connections`, {
-            headers: { Authorization: `Bearer ${portalKey}` },
-          });
-          if (!res.ok) return { error: `Portal gateway: ${res.status}` };
-          const data = (await res.json()) as {
-            connections?: Array<{ connection_id: string; provider: string }>;
-          };
-          const list = data.connections || [];
-          const filtered = filterByProvider(list, provider);
-          console.log('agent', 'info', 'list_integrations_connections: portal gateway', {
-            provider: provider ?? '(all)',
-            rawCount: list.length,
-            filteredCount: filtered.length,
-            connections: filtered.map((c) => ({ id: c.connection_id, provider: c.provider })),
-          });
-          return {
-            connections: filtered.map((c) => ({ id: c.connection_id, provider: c.provider })),
-            count: filtered.length,
-          };
-        } catch (e) {
-          return { error: (e as Error).message };
-        }
-      }
-
-      const base = config.integrationsUrl?.replace(/\/$/, '');
-      if (!base)
-        return {
-          error:
-            'Set PORTAL_GATEWAY_URL + PORTAL_API_KEY (from Portal → API Keys) or INTEGRATIONS_URL. If you have mcp_* tools (e.g. mcp_gmail_*, mcp_bluesky_*, mcp_twitter_*), use those instead—they work without Portal.',
-        };
-      const q = provider ? `?provider=${encodeURIComponent(provider)}` : '';
-      try {
-        const res = await fetch(`${base}/connections${q}`);
-        if (!res.ok) return { error: `Integrations: ${res.status}` };
-        const data = (await res.json()) as { connections?: Array<{ id: string; provider: string }> };
-        const raw = (data.connections || []).map((c) => ({ connection_id: c.id, id: c.id, provider: c.provider }));
-        const filtered = filterByProvider(raw, provider);
-        console.log('agent', 'info', 'list_integrations_connections: integrations URL', {
-          provider: provider ?? '(all)',
-          rawCount: raw.length,
-          filteredCount: filtered.length,
-          connections: filtered.map((c) => ({ id: c.connection_id, provider: c.provider })),
-        });
-        return {
-          connections: filtered.map((c) => ({ id: c.connection_id, provider: c.provider })),
-          count: filtered.length,
-        };
-      } catch (e) {
-        return { error: (e as Error).message };
-      }
-    },
-  });
-
   /** Create a scheduled job from a natural-language description. Use when the user confirms they want to create a job (after you suggested it). */
   registerTool({
     name: 'create_scheduled_job',
@@ -749,69 +649,6 @@ export function registerBuiltInTools(enqueueTask: (taskId: string) => void): voi
           schedule: parsed.cron_expression,
           message,
         };
-      } catch (e) {
-        return { error: (e as Error).message };
-      }
-    },
-  });
-
-  /** Get OAuth access token for a connection. Call this before calling Gmail/Calendar/Drive etc. APIs—the agent cannot reliably curl the portal from run_command; use this tool instead, then pass accessToken to run_command (curl) for the provider API. */
-  registerTool({
-    name: 'get_connection_token',
-    description:
-      'Get an OAuth access token for a connected integration. Call list_integrations_connections first to get connection_id, then call this with that connection_id. Returns accessToken to use in the next run_command (curl) as header: Authorization: Bearer <accessToken>. Required before any Gmail, Calendar, Drive, GitHub, Slack, etc. API call.',
-    profile: 'full',
-    parameters: {
-      type: 'object',
-      properties: {
-        connection_id: {
-          type: 'string',
-          description: 'Connection ID from list_integrations_connections (e.g. conn_gmail_..., conn_calendar_...).',
-        },
-      },
-      required: ['connection_id'],
-    },
-    execute: async (args) => {
-      const connectionId = typeof args.connection_id === 'string' ? args.connection_id.trim() : '';
-      if (!connectionId) return { error: 'connection_id is required' };
-      const portalGatewayBase = getPortalGatewayBase();
-      const portalKey = getEffectivePortalApiKey();
-      if (!portalGatewayBase || !portalKey) {
-        return { error: 'Set PORTAL_GATEWAY_URL and PORTAL_API_KEY (from Portal → API Keys)' };
-      }
-      try {
-        const url = `${portalGatewayBase.replace(/\/$/, '')}/connections/${encodeURIComponent(connectionId)}/use`;
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${portalKey}` },
-        });
-        if (!res.ok) {
-          const text = await res.text();
-          return { error: `Portal gateway: ${res.status}`, detail: text.slice(0, 200) };
-        }
-        const data = (await res.json()) as {
-          accessToken?: string;
-          error?: string;
-          provider?: string;
-          useProxy?: boolean;
-          blueskyDid?: string;
-          connectionId?: string;
-        };
-        if (data.error) return { error: data.error };
-        if (data.useProxy && data.provider === 'bluesky') {
-          console.log('agent', 'info', 'get_connection_token: Bluesky proxy', { connection_id: connectionId });
-          return {
-            useProxy: true,
-            connectionId: data.connectionId ?? connectionId,
-            blueskyDid: data.blueskyDid,
-            message: 'Use the bluesky_post tool with this connection_id and the post text to post. Do not use run_command (curl) for Bluesky.',
-          };
-        }
-        if (!data.accessToken) {
-          return { error: 'No accessToken in response' };
-        }
-        console.log('agent', 'info', 'get_connection_token: got token', { connection_id: connectionId });
-        return { accessToken: data.accessToken };
       } catch (e) {
         return { error: (e as Error).message };
       }

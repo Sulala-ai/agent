@@ -47,7 +47,7 @@ Skills are **documentation-only** and **dynamic**; there is no per-skill tool co
 
 ### Locations and precedence
 
-Skills load from: user (`~/.sulala/workspace/skills/<name>/README.md` or `SKILL.md`) > workspace (`AGENT_CONTEXT_PATH`) > managed (`~/.sulala/skills`) > bundled (`context/`) > extra (`SKILLS_EXTRA_DIRS`). User skills are safe from project updates.
+Skills load from: user (`~/.sulala/workspace/skills/<name>/README.md` or `SKILL.md`) > installed (workspace/hub) > workspace (`AGENT_CONTEXT_PATH`) > managed (`~/.sulala/skills`) > extra (`SKILLS_EXTRA_DIRS`). There are no built-in bundled skills; use the hub. User skills are safe from project updates.
 
 ### Add skills (non-manual)
 

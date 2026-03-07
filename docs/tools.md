@@ -8,7 +8,7 @@ This document describes how tools are built, filtered, and executed in the Sulal
 
 Tools are built from three layers:
 
-- **Core / built-in tools** — `registerBuiltInTools(enqueueTask)` in `agent/src/agent/tools.ts` registers core tools: `run_task`, `run_command`, `read_file` / `write_file` (when `AGENT_WORKSPACE_ROOT` is set), `run_agent`, and `list_integrations_connections`. Integration behavior (Gmail, Slack, GitHub, etc.) is **skill-driven** via run_command and list_integrations_connections; there are no dedicated provider tools. Optional tools are gated by config/env.
+- **Core / built-in tools** — `registerBuiltInTools(enqueueTask)` in `agent/src/agent/tools.ts` registers core tools: `run_task`, `run_command`, `read_file` / `write_file` (when `AGENT_WORKSPACE_ROOT` is set), `run_agent`, and `list_mcp_servers`. Integration behavior (Gmail, Slack, GitHub, etc.) is **skill-driven** via run_command and MCP tools or skills with own OAuth; there are no dedicated provider tools. Optional tools are gated by config/env.
 - **Plugin tools** — `getPluginTools(context)` in `agent/src/plugins/index.ts` calls each loaded plugin’s optional `tools?(context)` factory and merges the returned tools. Plugin tool names must not clash with core or other plugins. Plugins are loaded from the plugins directory; `tools()` is invoked at **list time** (when `listTools()` runs), not at plugin load time.
 - **Policy** — Tools are filtered by **allowlist** (`config.agentToolAllowlist` / `AGENT_TOOL_ALLOWLIST`) and **profile** (`config.agentToolProfile` / `AGENT_TOOL_PROFILE`: `full` | `messaging` | `coding` | `minimal`) via `applyToolPolicyPipeline()`. Only the resulting list is exposed to the model and to `executeTool()`.
 

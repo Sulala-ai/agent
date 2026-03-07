@@ -20,7 +20,11 @@ export type Skill = {
   bins?: string[];
   /** Required env vars from metadata sulala.requires.env (e.g. BSKY_HANDLE, BSKY_APP_PASSWORD). */
   env?: string[];
-  source?: 'user' | 'installed' | 'workspace' | 'managed' | 'bundled' | 'plugin' | 'extra';
+  /** Optional per-env hints from metadata sulala.requires.envHints (e.g. { PORTAL_API_KEY: "Get from portal.sulala.ai → API Keys" }). */
+  envHints?: Record<string, string>;
+  /** OAuth scope URLs from metadata sulala.oauthScopes (e.g. Gmail). User can override in skill config. */
+  oauthScopes?: string[];
+  source?: 'user' | 'installed' | 'workspace' | 'managed' | 'plugin' | 'extra';
 };
 
 function parseFrontmatter(
@@ -143,6 +147,41 @@ function extractRequiredEnv(metadataRaw: string | undefined): string[] {
   }
 }
 
+function extractEnvHints(metadataRaw: string | undefined): Record<string, string> | undefined {
+  if (!metadataRaw) return undefined;
+  try {
+    const jsonStr = metadataRaw.replace(/^\s+/gm, ' ').replace(/\s+/g, ' ');
+    const parsed = JSON.parse(jsonStr) as {
+      sulala?: { requires?: { envHints?: Record<string, unknown> } };
+    };
+    const raw = parsed?.sulala?.requires?.envHints;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+    const out: Record<string, string> = {};
+    for (const [key, value] of Object.entries(raw)) {
+      if (typeof key !== 'string') continue;
+      const v = typeof value === 'string' ? value.trim() : value != null ? String(value) : '';
+      if (v) out[key] = v;
+    }
+    return Object.keys(out).length ? out : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractOAuthScopes(metadataRaw: string | undefined): string[] | undefined {
+  if (!metadataRaw) return undefined;
+  try {
+    const jsonStr = metadataRaw.replace(/^\s+/gm, ' ').replace(/\s+/g, ' ');
+    const parsed = JSON.parse(jsonStr) as { sulala?: { oauthScopes?: string[] } };
+    const scopes = parsed?.sulala?.oauthScopes;
+    if (!Array.isArray(scopes)) return undefined;
+    const out = scopes.filter((s): s is string => typeof s === 'string' && s.trim().length > 0);
+    return out.length > 0 ? out : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function binAvailable(bin: string): boolean {
   const allowed = (process.env.ALLOWED_BINARIES || '')
     .split(',')
@@ -165,14 +204,14 @@ export function getAllRequiredBins(config: Config): string[] {
   return [...bins];
 }
 
-/** Paths in precedence order: user (my/) > installed (workspace root) > workspace (agentContextPath) > managed > bundled > extra. */
+/** Paths in precedence order: user (my/) > installed (workspace/hub) > workspace (agentContextPath) > managed > extra. No built-in bundled skills; use hub. */
 export function getSkillPaths(config: Config): { path: string; source: Skill['source']; isWorkspaceDir?: boolean; excludeSubdir?: string }[] {
   const out: { path: string; source: Skill['source']; isWorkspaceDir?: boolean; excludeSubdir?: string }[] = [];
   const cwd = process.cwd();
 
-  // User-created skills: ~/.sulala/workspace/skills/my/<slug>/ — created by you or the AI
+  // User-created skills: ~/.sulala/workspace/skills/my/<slug>/
   out.push({ path: config.skillsWorkspaceMyDir, source: 'user', isWorkspaceDir: true });
-  // Hub-installed skills: ~/.sulala/workspace/skills/<slug>/ — exclude "my" so we don't list it as a skill
+  // Hub-installed skills: ~/.sulala/workspace/skills/<slug>/ — exclude "my"
   out.push({ path: config.skillsWorkspaceDir, source: 'installed', isWorkspaceDir: true, excludeSubdir: 'my' });
   if (config.agentContextPath?.trim()) {
     out.push({
@@ -181,7 +220,6 @@ export function getSkillPaths(config: Config): { path: string; source: Skill['so
     });
   }
   out.push({ path: config.skillsManagedDir, source: 'managed' });
-  out.push({ path: config.skillsBundledDir, source: 'bundled' });
   for (const p of config.skillsPluginDirs) {
     out.push({ path: p, source: 'plugin' });
   }
@@ -221,6 +259,8 @@ function scanWorkspaceDirForSkills(
 
         const bins = extractRequiredBins(metadata);
         const env = extractRequiredEnv(metadata);
+        const envHints = extractEnvHints(metadata);
+        const oauthScopes = extractOAuthScopes(metadata);
         const extras = extractMetadataExtras(metadata);
         const missing: string[] = [];
         for (const b of bins) {
@@ -241,6 +281,8 @@ function scanWorkspaceDirForSkills(
           ...(extras.tags?.length ? { tags: extras.tags } : {}),
           bins: bins.length ? bins : undefined,
           env: env.length ? env : undefined,
+          ...(envHints ? { envHints } : {}),
+          ...(oauthScopes ? { oauthScopes } : {}),
           ...(missing.length ? { missing } : {}),
         });
       } catch {
@@ -304,6 +346,8 @@ function scanDirForSkills(
 
         const bins = extractRequiredBins(metadata);
         const env = extractRequiredEnv(metadata);
+        const envHints = extractEnvHints(metadata);
+        const oauthScopes = extractOAuthScopes(metadata);
         const extras = extractMetadataExtras(metadata);
         const missing: string[] = [];
         for (const b of bins) {
@@ -325,6 +369,8 @@ function scanDirForSkills(
           ...(extras.tags?.length ? { tags: extras.tags } : {}),
           bins: bins.length ? bins : undefined,
           env: env.length ? env : undefined,
+          ...(envHints ? { envHints } : {}),
+          ...(oauthScopes ? { oauthScopes } : {}),
           ...(missing.length ? { missing } : {}),
         });
       } catch {
@@ -337,7 +383,7 @@ function scanDirForSkills(
   return skills;
 }
 
-/** List skills from all paths with precedence: user > installed > workspace > managed > bundled > extra. Deduped by slug. By default filtered by skills.entries.<slug>.enabled; set includeDisabled true to return all (e.g. for dashboard). */
+/** List skills from all paths with precedence: user > installed > workspace > managed > plugin > extra. Deduped by slug. By default filtered by skills.entries.<slug>.enabled; set includeDisabled true to return all (e.g. for dashboard). */
 export function listSkills(config: Config, options?: { includeDisabled?: boolean }): Skill[] {
   const paths = getSkillPaths(config);
   const bySlug = new Map<string, Skill>();

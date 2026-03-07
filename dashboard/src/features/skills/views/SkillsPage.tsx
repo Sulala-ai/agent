@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { ArrowLeft, Copy, Eye, EyeOff, Lock, MoreVertical, Plus, Puzzle, Share2 } from "lucide-react";
+import { useRef, useState } from "react";
+import { ArrowLeft, Copy, Eye, EyeOff, Lock, MoreVertical, Plus, Puzzle, Share2, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -37,6 +37,7 @@ type SkillsState = ReturnType<typeof useSkills>;
 
 export function SkillsPage(state: SkillsState) {
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
   const [publishDialog, setPublishDialog] = useState<{ slug: string; name: string } | null>(null);
   const {
     skills,
@@ -48,6 +49,7 @@ export function SkillsPage(state: SkillsState) {
     systemRegistrySkills,
     systemRegistryLoading,
     installingSlug,
+    uploadingSkill,
     publishingSlug,
     selectedHubSkill,
     setSelectedHubSkill,
@@ -64,6 +66,7 @@ export function SkillsPage(state: SkillsState) {
     handleSkillEntryUpdate,
     handleSkillEntrySave,
     handleInstallSkill,
+    handleUploadSkill,
     handleUninstallSkill,
     handlePublishSkill,
     handleUpdateSkills,
@@ -84,6 +87,10 @@ export function SkillsPage(state: SkillsState) {
             <Button variant="default" size="sm" onClick={() => setWizardOpen(true)}>
               <Plus className="mr-1 size-4" />
               Create skill
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setUploadDialogOpen(true)}>
+              <Upload className="mr-1 size-4" />
+              Upload skill
             </Button>
             <input
               className="border-input bg-background h-9 w-48 rounded-md border px-3 text-sm placeholder:text-muted-foreground"
@@ -187,6 +194,13 @@ export function SkillsPage(state: SkillsState) {
         onSuccess={loadSkills}
       />
 
+      <UploadSkillDialog
+        open={uploadDialogOpen}
+        onOpenChange={setUploadDialogOpen}
+        onUpload={handleUploadSkill}
+        uploading={uploadingSkill}
+      />
+
       <PublishToStoreDialog
         slug={publishDialog?.slug}
         name={publishDialog?.name}
@@ -259,6 +273,9 @@ function InstalledTab({
         const row = { slug, name: s.name, description: s.description, installed: true as const, skill: s };
         const entry = skillsConfig?.entries?.[row.slug] ?? {};
         const enabled = entry.enabled !== false;
+        // Debug: log env and envHints coming from API for each skill
+        // eslint-disable-next-line no-console
+        console.debug("[InstalledTab] skill", row.slug, "env", s.env, "envHints", (s as any).envHints);
         return (
           <SkillCard
             key={row.slug}
@@ -271,6 +288,8 @@ function InstalledTab({
             status={s.status}
             source={s.source}
             env={s.env}
+            envHints={(s as any).envHints}
+            oauthScopes={s.oauthScopes}
             missing={s.missing}
             enabled={enabled}
             hasUpdate={skillsUpdates.has(row.slug)}
@@ -290,6 +309,159 @@ function InstalledTab({
         );
       })}
     </div>
+  );
+}
+
+function UploadSkillDialog({
+  open,
+  onOpenChange,
+  onUpload,
+  uploading,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onUpload: (markdown: string, slug?: string, toolsYaml?: string) => Promise<void>;
+  uploading: boolean;
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const toolsFileInputRef = useRef<HTMLInputElement>(null);
+  const [markdown, setMarkdown] = useState("");
+  const [slug, setSlug] = useState("");
+  const [toolsYaml, setToolsYaml] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file?.name.endsWith(".md")) {
+      const r = new FileReader();
+      r.onload = () => setMarkdown(String(r.result ?? ""));
+      r.readAsText(file);
+    }
+    e.target.value = "";
+  };
+
+  const handleToolsFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && (file.name.endsWith(".yaml") || file.name.endsWith(".yml"))) {
+      const r = new FileReader();
+      r.onload = () => setToolsYaml(String(r.result ?? ""));
+      r.readAsText(file);
+    }
+    e.target.value = "";
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    const content = markdown.trim();
+    if (!content) {
+      setError("Paste or upload a skill markdown file.");
+      return;
+    }
+    try {
+      await onUpload(content, slug.trim() || undefined, toolsYaml.trim() || undefined);
+      setMarkdown("");
+      setSlug("");
+      setToolsYaml("");
+      onOpenChange(false);
+    } catch {
+      // onError handled in hook
+    }
+  };
+
+  const handleClose = () => {
+    setMarkdown("");
+    setSlug("");
+    setToolsYaml("");
+    setError(null);
+    onOpenChange(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && handleClose()}>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" showCloseButton>
+        <DialogHeader>
+          <DialogTitle>Upload skill</DialogTitle>
+          <DialogDescription>
+            Paste or upload a skill .md file (required) and optional tools.yaml. The skill will be saved to your workspace and enabled.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4 pt-2">
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                Choose file (.md)
+              </Button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".md"
+                className="hidden"
+                onChange={handleFileChange}
+              />
+            </div>
+            <Label htmlFor="upload-markdown">Skill Markdown (full file with frontmatter)</Label>
+            <textarea
+              id="upload-markdown"
+              className="min-h-[200px] w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-sm"
+              value={markdown}
+              onChange={(e) => setMarkdown(e.target.value)}
+              placeholder="---\nname: my-skill\ndescription: Use when...\n---\n\n# My Skill\n..."
+            />
+          </div>
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => toolsFileInputRef.current?.click()}
+              >
+                Choose file (.yaml)
+              </Button>
+              <input
+                ref={toolsFileInputRef}
+                type="file"
+                accept=".yaml,.yml"
+                className="hidden"
+                onChange={handleToolsFileChange}
+              />
+            </div>
+            <Label htmlFor="upload-tools">tools.yaml (optional)</Label>
+            <textarea
+              id="upload-tools"
+              className="min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-sm"
+              value={toolsYaml}
+              onChange={(e) => setToolsYaml(e.target.value)}
+              placeholder="tools:\n  - name: my_tool\n    description: ...\n    auth: none\n    request: ..."
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="upload-slug">Slug (optional, derived from name if empty)</Label>
+            <Input
+              id="upload-slug"
+              placeholder="my-skill"
+              value={slug}
+              onChange={(e) => setSlug(e.target.value)}
+            />
+          </div>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={handleClose}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={uploading}>
+              {uploading ? "Uploading…" : "Upload & use"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -423,6 +595,8 @@ function SkillCard({
   status,
   source,
   env,
+  envHints,
+  oauthScopes,
   missing,
   enabled,
   hasUpdate,
@@ -448,6 +622,8 @@ function SkillCard({
   status: string;
   source?: string;
   env?: string[];
+  envHints?: Record<string, string>;
+  oauthScopes?: string[];
   missing?: string[];
   enabled: boolean;
   hasUpdate: boolean;
@@ -469,6 +645,9 @@ function SkillCard({
   ) => { valid: boolean; errors: Record<string, string> };
 }) {
   const [uninstallDialogOpen, setUninstallDialogOpen] = useState(false);
+  // Debug: inspect envHints arriving at SkillCard
+  // eslint-disable-next-line no-console
+  console.debug("[SkillCard] skill", slug, "env", env, "envHints", envHints);
   return (
     <article className="border-border/70 bg-card/30 relative flex flex-col gap-3 rounded-xl border p-4">
       <div className="absolute right-3 top-3">
@@ -582,12 +761,23 @@ function SkillCard({
         <SkillEnvForm
           slug={slug}
           env={env}
+          envHints={envHints}
           entry={entry}
           visibleSecretKeys={visibleSecretKeys}
           setVisibleSecretKeys={setVisibleSecretKeys}
           onEntryUpdate={onEntryUpdate}
           onEntrySave={onEntrySave}
           validateSkillEnvConfig={validateSkillEnvConfig}
+        />
+      )}
+      {(oauthScopes?.length || (Array.isArray(entry.oauthScopes) && entry.oauthScopes.length > 0)) && (
+        <SkillOAuthScopesForm
+          slug={slug}
+          defaultScopes={oauthScopes}
+          entry={entry}
+          onEntryUpdate={onEntryUpdate}
+          onEntrySave={onEntrySave}
+          env={env}
         />
       )}
       {missing && missing.length > 0 && (
@@ -660,9 +850,64 @@ function SkillPermissionsForm({
   );
 }
 
+function SkillOAuthScopesForm({
+  slug,
+  defaultScopes,
+  entry,
+  onEntryUpdate,
+  onEntrySave,
+  env,
+}: {
+  slug: string;
+  defaultScopes?: string[];
+  entry: Record<string, unknown>;
+  onEntryUpdate: (updates: Record<string, unknown>) => void;
+  onEntrySave: (requiredEnv?: string[], legacy?: Record<string, unknown>) => void;
+  env?: string[];
+}) {
+  const entryScopes = Array.isArray(entry.oauthScopes) ? entry.oauthScopes : undefined;
+  const scopes = entryScopes ?? defaultScopes ?? [];
+  const value = scopes.join("\n");
+
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const raw = e.target.value;
+    const next = raw
+      .split(/\n/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    onEntryUpdate({ ...entry, oauthScopes: next });
+  };
+
+  const handleBlur = () => {
+    onEntrySave(env, undefined);
+  };
+
+  return (
+    <div className="mt-1 flex flex-col gap-1.5 border-t pt-2 text-xs">
+      <div className="text-muted-foreground flex items-center gap-1.5 font-medium">
+        OAuth scopes
+      </div>
+      <textarea
+        id={`skill-${slug}-oauth-scopes`}
+        placeholder="One scope URL per line (e.g. https://www.googleapis.com/auth/gmail.readonly)"
+        value={value}
+        onChange={handleChange}
+        onBlur={handleBlur}
+        rows={Math.min(6, Math.max(2, scopes.length + 1))}
+        className="border-input bg-background w-full resize-y rounded px-2 py-1.5 text-xs font-mono"
+        aria-label="OAuth scopes"
+      />
+      <p className="text-muted-foreground text-[10px]">
+        Used when building the auth URL for own-credentials flow. Edit to add or remove scopes; saved in skill config.
+      </p>
+    </div>
+  );
+}
+
 function SkillEnvForm({
   slug,
   env,
+  envHints,
   entry,
   visibleSecretKeys,
   setVisibleSecretKeys,
@@ -672,6 +917,7 @@ function SkillEnvForm({
 }: {
   slug: string;
   env: string[];
+  envHints?: Record<string, string>;
   entry: Record<string, unknown>;
   visibleSecretKeys: Record<string, boolean>;
   setVisibleSecretKeys: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
@@ -698,6 +944,36 @@ function SkillEnvForm({
         const id = `skill-${slug}-${envVar}`;
         const visibleKey = `${slug}-${envVar}`;
         const visible = visibleSecretKeys[visibleKey];
+        const hint = envHints?.[envVar];
+        let renderedHint: React.ReactNode = null;
+        if (hint) {
+          const urlMatch = hint.match(/https?:\/\/\S+/);
+          if (urlMatch) {
+            const url = urlMatch[0].replace(/[),.]+$/, "");
+            const idx = hint.indexOf(urlMatch[0]);
+            const before = hint.slice(0, idx);
+            const after = hint.slice(idx + urlMatch[0].length);
+            renderedHint = (
+              <>
+                {before}
+                <a
+                  href={url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline underline-offset-2"
+                >
+                  {url}
+                </a>
+                {after}
+              </>
+            );
+          } else {
+            renderedHint = hint;
+          }
+        }
+        // Debug: see env + hint wiring in UI
+        // eslint-disable-next-line no-console
+        console.debug("[SkillEnvForm] envVar", slug, envVar, "hint", hint);
         return (
           <Field key={envVar} className="min-w-[200px]">
             <FieldLabel htmlFor={id}>{envVar}</FieldLabel>
@@ -738,9 +1014,19 @@ function SkillEnvForm({
                 {err}
               </FieldError>
             )}
-            {!err && showEyeForKey(envVar) && (
+            
+            {(showEyeForKey(envVar) || renderedHint) && (
+
               <FieldDescription>
-                Tokens and keys are stored securely. Use the eye icon to show or hide.
+                {renderedHint && (
+                  <>
+                    {renderedHint}
+                    <br />
+                  </>
+                )}
+                {showEyeForKey(envVar)
+                  ? "Tokens and keys are stored securely. Use the eye icon to show or hide."
+                  : null}
               </FieldDescription>
             )}
           </Field>

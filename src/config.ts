@@ -177,7 +177,7 @@ export const config: Config = {
   portalApiKey: (process.env.PORTAL_API_KEY || '').trim() || null,
   discordBotToken: (process.env.DISCORD_BOT_TOKEN || '').trim() || null,
   stripeSecretKey: (process.env.STRIPE_SECRET_KEY || '').trim() || null,
-  skillsBundledDir: join(projectRoot, 'context'),
+  skillsBundledDir: null,
   /** Workspace root: scripts, .env, automations.json. Env SULALA_WORKSPACE_DIR. */
   workspaceDir:
     process.env.SULALA_WORKSPACE_DIR ||

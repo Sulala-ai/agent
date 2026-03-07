@@ -16,7 +16,7 @@ import {
 import { listTools, executeTool, getAgentRunDepth, setAgentRunDepth, type ExecuteToolOptions } from './tools.js';
 import { getMemoryForContext, getSharedScopeKeyForSession } from './memory.js';
 import { getSkillPaths } from './skills.js';
-import { isSkillEnabled } from './skills-config.js';
+import { isSkillEnabled, loadSkillsConfig } from './skills-config.js';
 import type { AgentTurnMessage, AgentMessageRow } from '../types.js';
 
 export type AgentStreamEvent =
@@ -204,8 +204,8 @@ export interface RunTurnResult {
   pendingActionId?: string;
 }
 
-/** Parse YAML-like frontmatter (--- ... ---) and return name, description, and body. */
-function parseFrontmatter(content: string): { name?: string; description?: string; body: string } {
+/** Parse YAML-like frontmatter (--- ... ---) and return name, description, body, and raw frontmatter block. */
+function parseFrontmatter(content: string): { name?: string; description?: string; body: string; frontmatterBlock?: string } {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
   if (!match) return { body: content };
   const block = match[1];
@@ -218,7 +218,22 @@ function parseFrontmatter(content: string): { name?: string; description?: strin
     const descMatch = line.match(/^description:\s*(.+)$/);
     if (descMatch) description = descMatch[1].trim().replace(/^['"]|['"]$/g, '');
   }
-  return { name, description, body };
+  return { name, description, body, frontmatterBlock: block };
+}
+
+/** Extract sulala.oauthScopes from skill frontmatter metadata (for auth URL building). */
+function extractOAuthScopesFromFrontmatter(frontmatterBlock: string | undefined): string[] | undefined {
+  if (!frontmatterBlock) return undefined;
+  const idx = frontmatterBlock.indexOf('metadata:');
+  if (idx < 0) return undefined;
+  const rest = frontmatterBlock.slice(idx + 'metadata:'.length).trim();
+  try {
+    const parsed = JSON.parse(rest) as { sulala?: { oauthScopes?: string[] } };
+    const scopes = parsed?.sulala?.oauthScopes;
+    return Array.isArray(scopes) && scopes.length > 0 ? scopes : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function collectFiles(base: string): { path: string; name: string }[] {
@@ -258,7 +273,10 @@ function collectFiles(base: string): { path: string; name: string }[] {
 
 function loadContextFromPaths(): string {
   const paths = getSkillPaths(config);
-  const bySkillName = new Map<string, { index: { name: string; description: string }; body: string }>();
+  const bySkillName = new Map<
+    string,
+    { index: { name: string; description: string }; body: string; slug: string; oauthScopes?: string[] }
+  >();
   const nonSkillChunks: string[] = [];
   for (const { path: base } of paths) {
     for (const { path: full, name: fileName } of collectFiles(base)) {
@@ -271,9 +289,12 @@ function loadContextFromPaths(): string {
         const parsed = parseFrontmatter(raw);
         const slug = fileName.replace(/\.md$/, '');
         if (parsed.name && parsed.description && isSkillEnabled(slug)) {
+          const oauthScopes = extractOAuthScopesFromFrontmatter(parsed.frontmatterBlock);
           bySkillName.set(parsed.name, {
             index: { name: parsed.name, description: parsed.description },
             body: parsed.body,
+            slug,
+            ...(oauthScopes?.length ? { oauthScopes } : {}),
           });
         } else {
           nonSkillChunks.push(`--- ${fileName}\n${raw}`);
@@ -283,10 +304,16 @@ function loadContextFromPaths(): string {
       }
     }
   }
+  const skillsConfig = loadSkillsConfig();
   const skillIndex = Array.from(bySkillName.values()).map((v) => v.index);
-  const chunks = Array.from(bySkillName.values()).map(
-    (v) => `### Skill: ${v.index.name}\n\n${v.body}`
-  );
+  const chunks = Array.from(bySkillName.values()).map((v) => {
+    const entryScopes = skillsConfig.entries?.[v.slug]?.oauthScopes;
+    const scopes =
+      Array.isArray(entryScopes) && entryScopes.length > 0 ? entryScopes : v.oauthScopes;
+    const scopeLine =
+      scopes?.length ? `**OAuth scopes (use in auth URL):** ${scopes.join(' ')}\n\n` : '';
+    return `### Skill: ${v.index.name}\n\n${scopeLine}${v.body}`;
+  });
   chunks.push(...nonSkillChunks);
   if (chunks.length === 0) return '';
   const indexSection =
@@ -296,7 +323,7 @@ function loadContextFromPaths(): string {
   // Inject workspace path so the agent knows where to create skills and watch-folder automations.
   const workspaceSection =
     `## Workspace\n\n` +
-    `- **Integrations and MCP (posting or other actions on a service)**: Use whichever is available and matches the request. (1) **Prefer MCP tools first**: if a tool whose name starts with **mcp_** matches the requested service and action (e.g. Gmail → mcp_gmail_list_messages, mcp_gmail_read_message; Twitter → mcp_twitter_post_tweet), use it directly. MCP tools are self-contained and work without Portal/Integrations. (2) **Otherwise use integrations**: call **list_integrations_connections** with the provider that matches (e.g. "bluesky", "twitter", "gmail"); if connections exist, use the integration tool (e.g. bluesky_post, x_post) or get_connection_token + run_command for APIs. (3) Do not call list_integrations_connections if a matching mcp_* tool exists—just use the MCP tool. Never use an integration tool for a different provider (e.g. do not use x_post for Bluesky).\n\n` +
+    `- **MCP and skills (posting or other actions on a service)**: (1) **Prefer MCP tools**: if a tool whose name starts with **mcp_** matches the requested service (e.g. Gmail → mcp_gmail_*, Twitter → mcp_twitter_*), use it directly. (2) **Otherwise use skills with own OAuth**: follow the skill doc (e.g. Gmail skill) to use run_command with credentials from skill config (GMAIL_CLIENT_ID, GMAIL_REFRESH_TOKEN, etc.) and call the provider API. Never use an integration tool for a different provider.\n\n` +
     `- **Skills you create**: use **write_file** with path \`${config.skillsWorkspaceMyDir}/<slug>/README.md\` (e.g. \`${config.skillsWorkspaceMyDir}/my-skill/README.md\`). Also create \`${config.skillsWorkspaceMyDir}/<slug>/tools.yaml\` with \`tools: []\` and a short comment so the user can add required tools there. Do not use \`~\` or \`$HOME\`. Hub-installed skills live in \`${config.skillsWorkspaceDir}/<slug>/\`; keep created-by-you skills in \`${config.skillsWorkspaceMyDir}/\`.\n\n` +
     `- **Scripts and watch-folder automations**: Workspace root is \`${config.workspaceDir}\`. When the user asks to watch a folder and do something (e.g. post new images to Bluesky or Facebook):\n` +
     `  1. Create a script under \`${config.workspaceDir}/scripts/\` (e.g. \`scripts/watch_bluesky.sh\` or \`scripts/watch_facebook.sh\`) that accepts the **file path as first argument** (\`$1\`) and uses env vars for credentials.\n` +

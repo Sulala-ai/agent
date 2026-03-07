@@ -3,27 +3,15 @@ import type { AutomationIdea } from "../types/automationIdeas";
 
 export type AutomationSuggestionsBarProps = {
   ideas: AutomationIdea[];
-  connectedIds: string[];
   onSelectIdea: (idea: AutomationIdea) => void;
-  onMissingIntegrations: (idea: AutomationIdea) => void;
 };
 
 export function AutomationSuggestionsBar({
   ideas,
-  connectedIds,
   onSelectIdea,
-  onMissingIntegrations,
 }: AutomationSuggestionsBarProps) {
   const handleClick = (idea: AutomationIdea) => {
-    const lower = (s: string) => s.toLowerCase();
-    const hasRequired = idea.required_integrations.every((id) =>
-      connectedIds.some((c) => lower(c) === lower(id))
-    );
-    if (hasRequired) {
-      onSelectIdea(idea);
-    } else {
-      onMissingIntegrations(idea);
-    }
+    onSelectIdea(idea);
   };
 
   return (

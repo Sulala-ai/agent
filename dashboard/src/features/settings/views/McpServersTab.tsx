@@ -17,8 +17,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { fetchMcpConfig, updateMcpConfig, buildMcpServerWithAi, type McpServerEntry } from "@/lib/api";
-import { ExternalLink, FileDown, Pencil, Plus, Server, Sparkles, Trash2 } from "lucide-react";
+import { fetchMcpConfig, updateMcpConfig, reloadMcpConfig, buildMcpServerWithAi, type McpServerEntry } from "@/lib/api";
+import { ExternalLink, FileDown, Pencil, Plus, RefreshCw, Server, Sparkles, Trash2 } from "lucide-react";
 
 /** Normalize any common MCP config input to a servers array (we accept multiple formats but store one). */
 function normalizeInputToServersArray(raw: unknown): unknown[] {
@@ -102,6 +102,7 @@ export function McpServersTab({ onError }: { onError?: (msg: string) => void }) 
   const [buildWithAiDescription, setBuildWithAiDescription] = useState("");
   const [buildWithAiLoading, setBuildWithAiLoading] = useState(false);
   const [buildWithAiResult, setBuildWithAiResult] = useState<{ taskId: string; message: string } | null>(null);
+  const [reloading, setReloading] = useState(false);
 
   useEffect(() => {
     if (serverDialogOpen) {
@@ -183,6 +184,20 @@ export function McpServersTab({ onError }: { onError?: (msg: string) => void }) 
     }
   };
 
+  const handleReloadFromFile = async () => {
+    setReloading(true);
+    setError(null);
+    try {
+      const data = await reloadMcpConfig();
+      setServers(data.servers ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      onError?.(e instanceof Error ? e.message : String(e));
+    } finally {
+      setReloading(false);
+    }
+  };
+
   const handleImportFromJson = () => {
     setImportError(null);
     const parsed = parseServersFromJson(importJsonText);
@@ -248,7 +263,7 @@ export function McpServersTab({ onError }: { onError?: (msg: string) => void }) 
             </span>
             <span className="block">
               Add MCP servers one at a time. Tools appear as <code className="rounded bg-muted px-1">mcp_&lt;name&gt;_&lt;tool&gt;</code>.
-              Config is saved to <code className="rounded bg-muted px-1">~/.sulala/mcp.json</code>.
+              Config is saved to <code className="rounded bg-muted px-1">~/.sulala/mcp.json</code>. If you edit that file by hand, click &quot;Reload from file&quot; so the agent picks up changes without restarting.
             </span>
             <span className="block">
               Find more servers at{" "}
@@ -277,6 +292,10 @@ export function McpServersTab({ onError }: { onError?: (msg: string) => void }) 
             </Button>
             <Button type="button" size="sm" variant="secondary" onClick={handleSave} disabled={saving}>
               {saving ? "Saving…" : "Save & reload tools"}
+            </Button>
+            <Button type="button" size="sm" variant="outline" onClick={handleReloadFromFile} disabled={reloading} title="Re-read mcp.json and reload tools (use after editing the file by hand)">
+              <RefreshCw className={`size-4 mr-1 ${reloading ? "animate-spin" : ""}`} />
+              {reloading ? "Reloading…" : "Reload from file"}
             </Button>
           </div>
           {servers.length === 0 ? (

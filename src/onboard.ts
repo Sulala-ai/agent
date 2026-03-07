@@ -111,6 +111,29 @@ export async function openOnboardPage(opts: { port?: number; delayMs?: number })
   }
 }
 
+/** PATH for daemon so MCP servers can find npx, tsx, node (launchd gets minimal env). */
+function getDaemonPath(): string {
+  const defaults = '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin';
+  const fromEnv = (process.env.PATH || '').trim();
+  if (!fromEnv) return defaults;
+  const seen = new Set<string>();
+  const parts: string[] = [];
+  for (const p of defaults.split(':')) {
+    if (p && !seen.has(p)) {
+      seen.add(p);
+      parts.push(p);
+    }
+  }
+  for (const p of fromEnv.split(':')) {
+    const t = p.trim();
+    if (t && !seen.has(t)) {
+      seen.add(t);
+      parts.push(t);
+    }
+  }
+  return parts.join(':');
+}
+
 /** macOS: install launchd user agent so the agent runs at login and stays running. */
 function installDaemonDarwin(sulalaHome: string, packageRoot: string): void {
   const nodePath = getNodePath();
@@ -119,6 +142,7 @@ function installDaemonDarwin(sulalaHome: string, packageRoot: string): void {
   const logDir = join(sulalaHome, 'logs');
   if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
 
+  const daemonPath = getDaemonPath();
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -132,6 +156,11 @@ function installDaemonDarwin(sulalaHome: string, packageRoot: string): void {
   </array>
   <key>WorkingDirectory</key>
   <string>${sulalaHome}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>${daemonPath.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</string>
+  </dict>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
@@ -158,6 +187,7 @@ function installDaemonLinux(sulalaHome: string, packageRoot: string): void {
   const logDir = join(sulalaHome, 'logs');
   if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
 
+  const daemonPath = getDaemonPath();
   const unit = `[Unit]
 Description=Sulala Agent
 After=network.target
@@ -165,6 +195,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=${sulalaHome}
+Environment=PATH=${daemonPath.replace(/\\/g, '\\\\')}
 ExecStart=${nodePath} ${entryPath}
 Restart=on-failure
 RestartSec=5

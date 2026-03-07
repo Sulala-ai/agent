@@ -116,7 +116,7 @@ sulala skill uninstall apple-notes [--global]
 
 **Onboard & daemon (global install):** Run `sulala onboard` to create `~/.sulala` and a default `.env`; the browser opens to **http://127.0.0.1:2026/onboard** to add API keys (saved to `~/.sulala/.env`). Run `sulala onboard --install-daemon` to install a background service (launchd on macOS, systemd on Linux) so the agent runs at login. Logs: `~/.sulala/logs/`. Use `sulala stop` / `sulala start` to stop or start the daemon; `sulala onboard --uninstall-daemon` to remove it.
 
-**Works on any device:** The published package includes bundled skills (`context/`). Set `SKILLS_REGISTRY_URL` to your hub (e.g. https://hub.sulala.ai/api/sulalahub/registry) to list and install skills via `sulala skill list` / `sulala skill install`.
+**Works on any device:** There are no built-in system skills; use a hub. Set `SKILLS_REGISTRY_URL` to your hub (e.g. https://hub.sulala.ai/api/sulalahub/registry) to list and install skills via `sulala skill list` / `sulala skill install`.
 
 **Integrations vs MCP**
 
@@ -127,11 +127,9 @@ sulala skill uninstall apple-notes [--global]
 
 - The agent supports **MCP servers** so the AI can use external tools and data (files, databases, APIs). Add and manage MCP servers in the dashboard under **Settings → MCP** (or Integrations → MCP Servers). Configured servers are available to the agent during chat and tool-use runs.
 
-**Hub & integrations**
+**Hub**
 
-- **Skills hub:** [hub.sulala.ai](https://hub.sulala.ai) — upload skills for the agent and share them with others; install via `sulala skill list` / `sulala skill install` when using that registry.
-- **Integrations:** Add more integrations (Gmail, Slack, GitHub, Calendar, etc.) for the agent; use the dashboard Integrations area or the integrations catalog to connect and manage them.
-- **Portal (testing):** [portal.sulala.ai](https://portal.sulala.ai) — connect OAuth apps for testing (Gmail, Calendar, Slack, GitHub, etc.). Set `PORTAL_GATEWAY_URL` and `PORTAL_API_KEY` in the agent (e.g. in dashboard Settings → Portal) so it can list connections and get tokens. See [docs/sulalahub.md](docs/sulalahub.md) and `context/portal-integrations.md`.
+- **Skills hub:** [hub.sulala.ai](https://hub.sulala.ai) — upload skills for the agent and share them with others; install via `sulala skill list` / `sulala skill install` when using that registry. Skills can use their own OAuth when you submit them; there is no built-in integration or portal for others.
 
 **Env for CLI/gateway:** Set `GATEWAY_URL` and optionally `GATEWAY_API_KEY` for gateway commands; `SULALA_SKILLS_DIR` and `AGENT_CONTEXT_PATH` for skill paths.
 

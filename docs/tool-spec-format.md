@@ -1,15 +1,15 @@
-# Tool spec format (context/<name>/tools.yaml)
+# Tool spec format (skill dir / tools.yaml)
 
-Tools for integrations (Stripe, Discord, etc.) can be defined in **YAML** under `context/<name>/tools.yaml`. The spec loader reads these files at startup and registers one tool per entry. No TypeScript needed for new endpoints.
+Tools for integrations (Stripe, Discord, etc.) can be defined in **YAML** under a skill directory as `<skill-dir>/tools.yaml`. The spec loader reads these files at startup and registers one tool per entry. No TypeScript needed for new endpoints. Skills come from the hub or workspace (no built-in system skills).
 
 For **multi-step flows** (e.g. Bluesky post, Stripe create invoice), use **`steps`** in the YAML. The generic step executor runs each step in order; later steps can use `{{step0.id}}` (or `{{step0.blueskyDid}}` etc.) from previous responses. No custom code needed.
 
 ## Layout
 
-- **context/stripe/README.md** — Skill instructions (what the model sees).
-- **context/stripe/tools.yaml** — Tool definitions for that integration.
+- **&lt;skill-dir&gt;/README.md** — Skill instructions (what the model sees).
+- **&lt;skill-dir&gt;/tools.yaml** — Tool definitions for that integration.
 
-Same pattern for `context/discord/`, etc. The loader scans every subdir of `AGENT_CONTEXT_PATH` (or `context` if unset) for a `tools.yaml` file.
+Example: a Stripe skill might live at `workspace/skills/stripe/README.md` and `workspace/skills/stripe/tools.yaml`. The loader scans workspace and hub-installed skill dirs (and `AGENT_CONTEXT_PATH` if set) for a `tools.yaml` file.
 
 ## YAML schema
 
@@ -50,16 +50,15 @@ tools:
 
 ## Auth types (fixed in code)
 
-- **stripe_secret_key** — Settings → Payment or `STRIPE_SECRET_KEY`.
+- **stripe_secret_key** — `STRIPE_SECRET_KEY` in `.env` (or skill config). No payment settings in the agent; skills come from the hub.
 - **discord_bot_token** — Settings → Channels (Discord) or `DISCORD_BOT_TOKEN`.
-- **portal** — Portal gateway: `PORTAL_GATEWAY_URL` + `PORTAL_API_KEY` (used by Bluesky and other Portal proxy tools).
 - **none** — No auth header.
 
 ## Multi-step flows (`steps`)
 
 Use **`steps`** instead of **`request`** when the tool needs multiple HTTP calls. Each step can reference previous step responses via `{{step0.id}}`, `{{step0.blueskyDid}}`, etc.
 
-- **step.url** — May use `{{argName}}`, `{{base}}` (when `auth: portal`), and `{{step0.x}}` (from previous step JSON; use `responsePath` to expose one field as `stepN`).
+- **step.url** — May use `{{argName}}` and `{{step0.x}}` (from previous step JSON; use `responsePath` to expose one field as `stepN`).
 - **step.bodyType: form** — Form-encoded body. **body** is a map: form param name → arg name or `"{{step0.id}}"`.
 - **step.bodyType: json** + **step.bodyTemplate** — Nested JSON; values can be `"{{text}}"`, `"{{step0.blueskyDid}}"`, `"{{$now}}"` (ISO timestamp).
 - **step.responsePath** — Path in response to store for next steps (e.g. `id`). Omit to expose the full response as `stepN`.

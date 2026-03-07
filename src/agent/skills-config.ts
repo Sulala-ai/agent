@@ -255,7 +255,7 @@ export function getSkillToolPolicy(slug: string): { allowlist: string[] | null; 
   return { allowlist, readOnly };
 }
 
-/** Build env vars from all skill entries (key = env name, value = string). Used by run_command so curl etc. see PERIGON_API_KEY etc. */
+/** Build env vars for run_command from ~/.sulala/config.json (or SULALA_CONFIG_PATH) under skills.entries.<slug> (e.g. gmail.PORTAL_API_KEY). */
 export function getSkillConfigEnv(): Record<string, string> {
   const cfg = loadSkillsConfig();
   const out: Record<string, string> = {};

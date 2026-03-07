@@ -11,6 +11,7 @@ import {
   fetchAgentSkillUninstall,
   fetchAgentSkillPublish,
   fetchAgentSkillsPublishStatus,
+  fetchAgentSkillUpload,
 } from "@/lib/api";
 import type { AgentSkill, AgentRegistrySkill, AgentSkillsConfig } from "@/lib/api";
 
@@ -23,6 +24,7 @@ export function useSkills(onError: (msg: string) => void) {
   const [systemRegistrySkills, setSystemRegistrySkills] = useState<AgentRegistrySkill[]>([]);
   const [systemRegistryLoading, setSystemRegistryLoading] = useState(false);
   const [installingSlug, setInstallingSlug] = useState<string | null>(null);
+  const [uploadingSkill, setUploadingSkill] = useState(false);
   const [publishingSlug, setPublishingSlug] = useState<string | null>(null);
   const [selectedHubSkill, setSelectedHubSkill] = useState<AgentRegistrySkill | null>(null);
   const [skillsUpdating, setSkillsUpdating] = useState(false);
@@ -147,6 +149,22 @@ export function useSkills(onError: (msg: string) => void) {
     }
   };
 
+  const handleUploadSkill = async (markdown: string, slug?: string, toolsYaml?: string) => {
+    setUploadingSkill(true);
+    try {
+      await fetchAgentSkillUpload(markdown, slug, toolsYaml);
+      loadSkills();
+      const r = await fetchAgentSkillsConfig();
+      setSkillsConfig(r.skills ?? null);
+      if (r.configPath) setSkillsConfigPath(r.configPath);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : "Upload failed");
+      throw e;
+    } finally {
+      setUploadingSkill(false);
+    }
+  };
+
   const handleUninstallSkill = async (slug: string, source?: AgentSkill["source"]) => {
     const target = source === "user" ? "user" : source === "installed" ? "managed" : "managed";
     try {
@@ -205,6 +223,7 @@ export function useSkills(onError: (msg: string) => void) {
     systemRegistrySkills,
     systemRegistryLoading,
     installingSlug,
+    uploadingSkill,
     publishingSlug,
     selectedHubSkill,
     setSelectedHubSkill,
@@ -222,6 +241,7 @@ export function useSkills(onError: (msg: string) => void) {
     handleSkillEntryUpdate,
     handleSkillEntrySave,
     handleInstallSkill,
+    handleUploadSkill,
     handleUninstallSkill,
     handlePublishSkill,
     handleUpdateSkills,

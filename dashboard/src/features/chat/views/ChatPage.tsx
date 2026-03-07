@@ -120,6 +120,15 @@ const markdownComponents = {
     ) : null,
 };
 
+/** Turn raw http(s) URLs in text into markdown links so they render clickable. Skips URLs already inside ]( ... ). */
+function linkifyUrls(content: string): string {
+  if (!content) return "";
+  return content.replace(
+    /(?<!\]\()(https?:\/\/[^\s<>"'\])]+(?:\.[^\s<>"'\])]+)*)/gi,
+    (url) => `[${url}](${url})`
+  );
+}
+
 /** Convert attachment bracket to markdown images so user-uploaded URLs render as images. */
 function userContentWithImages(content: string | null): string {
   if (!content) return "";
@@ -158,7 +167,7 @@ function ChatMessage({
         <div className="border-border bg-muted/30 flex max-w-[min(85%,42rem)] flex-col gap-0.5 rounded-lg rounded-tr-sm px-3 py-2 text-sm">
           <div className="chat-markdown text-foreground break-words [&>*:last-child]:mb-0">
             <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-              {userContent}
+              {linkifyUrls(userContent)}
             </ReactMarkdown>
           </div>
           {ts && (
@@ -194,7 +203,7 @@ function ChatMessage({
             <div className="flex items-end gap-x-1">
               <div className="chat-markdown text-foreground min-w-0 flex-1 [&>*:last-child]:mb-0">
                 <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                  {String(m.content)}
+                  {linkifyUrls(String(m.content))}
                 </ReactMarkdown>
               </div>
               {isStreaming && <BlinkingCursor className="shrink-0" />}
@@ -302,9 +311,6 @@ export function ChatPage(props: ChatPageProps) {
     onClearMissingIntegrationsFromServer,
   } = props;
 
-  const [missingModalOpen, setMissingModalOpen] = useState(false);
-  const [missingModalRequired, setMissingModalRequired] = useState<string[]>([]);
-  const [missingModalIdeaTitle, setMissingModalIdeaTitle] = useState<string>("");
   const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
   const [mcpServerNames, setMcpServerNames] = useState<string[]>([]);
 
@@ -315,7 +321,7 @@ export function ChatPage(props: ChatPageProps) {
   }, []);
 
   const connectedIds = getConnectedIntegrations(integrations);
-  /** Capabilities satisfied by OAuth integrations OR MCP servers (e.g. gmail MCP or gmail OAuth both allow gmail ideas). */
+  /** Capabilities satisfied by MCP servers or skills with own OAuth (e.g. gmail MCP or Gmail skill). */
   const availableIds = Array.from(
     new Set([...connectedIds.map((id) => id.toLowerCase()), ...mcpServerNames])
   );
@@ -327,14 +333,8 @@ export function ChatPage(props: ChatPageProps) {
     setLastAppliedIdea?.(idea);
   };
 
-  const handleMissingIntegrations = (idea: AutomationIdea) => {
-    setMissingModalRequired(idea.required_integrations);
-    setMissingModalIdeaTitle(idea.title);
-    setMissingModalOpen(true);
-  };
-
   const handleModalConnect = (_provider: string) => {
-    setMissingModalOpen(false);
+    onClearMissingIntegrationsFromServer?.();
     onNavigateToIntegrations?.();
   };
 
@@ -546,9 +546,7 @@ export function ChatPage(props: ChatPageProps) {
               (showSuggestionsBar ? (
                 <AutomationSuggestionsBar
                   ideas={AUTOMATION_IDEAS}
-                  connectedIds={availableIds}
                   onSelectIdea={handleSelectIdea}
-                  onMissingIntegrations={handleMissingIntegrations}
                 />
               ) : (
                 <p className="text-muted-foreground text-sm">
@@ -700,18 +698,12 @@ export function ChatPage(props: ChatPageProps) {
           </Button>
         </div>
         <MissingIntegrationsModal
-          open={missingModalOpen || (missingIntegrationsFromServer != null && missingIntegrationsFromServer.length > 0)}
+          open={missingIntegrationsFromServer != null && missingIntegrationsFromServer.length > 0}
           onOpenChange={(open) => {
-            if (!open) {
-              setMissingModalOpen(false);
-              onClearMissingIntegrationsFromServer?.();
-            }
+            if (!open) onClearMissingIntegrationsFromServer?.();
           }}
-          requiredIntegrations={
-            missingModalOpen ? missingModalRequired : missingIntegrationsFromServer ?? []
-          }
+          requiredIntegrations={missingIntegrationsFromServer ?? []}
           connectedIds={availableIds}
-          ideaTitle={missingModalOpen ? missingModalIdeaTitle : ""}
           onConnect={handleModalConnect}
         />
       </CardContent>
